@@ -1,0 +1,33 @@
+name: Bug report
+description: A command crashed, printed something wrong, or cost more than expected.
+labels: [bug]
+body:
+  - type: input
+    id: command
+    attributes:
+      label: Command
+      description: The exact command you ran. Leave out your API key.
+      placeholder: instagram-scraper giveaway https://www.instagram.com/p/... --winners 3
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `instagram-scraper --version` and `python --version`.
+    validations:
+      required: true
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened
+      description: Paste the output, including the "API calls" line. Remove your API key.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true

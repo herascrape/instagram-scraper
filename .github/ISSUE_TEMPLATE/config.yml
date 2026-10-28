@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: herascrape API questions
+    url: https://herascrape.com/docs
+    about: Endpoints, pricing and keys for the API this tool runs on.

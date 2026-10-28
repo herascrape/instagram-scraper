@@ -1,0 +1,24 @@
+name: Feature request
+description: A new command, rule, metric or export format.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: job
+    attributes:
+      label: The job
+      description: What are you trying to get done, and how do you do it today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: The command or option you have in mind, and what it would print or export.
+      placeholder: instagram-scraper giveaway ... --include-replies
+    validations:
+      required: true
+  - type: textarea
+    id: data
+    attributes:
+      label: Data it needs
+      description: Which Instagram data it reads (profiles, followers, comments...), if you know.
