@@ -30,15 +30,18 @@ def test_looks_generated(username: str, expected: bool) -> None:
 @pytest.mark.parametrize(
     ("signals", "verified", "expected"),
     [
-        (["follow_ratio", "generated_username", "no_name"], False, "fake"),
+        (["follow_ratio", "generated_username", "no_posts"], False, "fake"),
         (["follow_ratio", "no_posts"], False, "fake"),
+        (["follow_ratio", "few_posts", "empty_bio"], False, "fake"),
+        (["follow_ratio", "no_avatar"], False, "fake"),
+        (["follow_ratio", "generated_username", "empty_bio"], False, "real"),
         (["follow_ratio"], False, "real"),
         (["no_posts", "empty_bio"], False, "ghost"),
         (["no_avatar", "no_posts"], False, "ghost"),
         (["no_avatar", "empty_bio"], False, "real"),
         (["few_posts", "no_avatar"], False, "ghost"),
         (["few_posts"], False, "real"),
-        (["follow_ratio", "generated_username", "no_name"], True, "real"),
+        (["follow_ratio", "no_posts", "no_name"], True, "real"),
         ([], False, "real"),
     ],
 )
@@ -78,6 +81,19 @@ def test_profile_signals() -> None:
         "no_name",
         "empty_bio",
     ]
+
+
+@pytest.mark.parametrize(
+    ("posts", "signal"), [(0, "no_posts"), (1, "few_posts"), (9, "few_posts")]
+)
+def test_post_count_signals(posts: int, signal: Signal) -> None:
+    profile = Profile.from_api(full_profile("1", posts=posts))
+    assert signal in profile_signals(profile)
+
+
+def test_ten_posts_is_not_few() -> None:
+    profile = Profile.from_api(full_profile("1", posts=10))
+    assert "few_posts" not in profile_signals(profile)
 
 
 def test_profile_signals_ratio_needs_500_following() -> None:

@@ -21,7 +21,7 @@ Category = Literal["real", "ghost", "fake"]
 SIGNAL_LABELS: dict[Signal, str] = {
     "no_avatar": "no profile picture",
     "no_posts": "no posts",
-    "few_posts": "1 or 2 posts",
+    "few_posts": "fewer than 10 posts",
     "follow_ratio": "follows 10x more accounts than follow it (500+)",
     "mass_following": "follows 5,000+ accounts",
     "generated_username": "username looks generated",
@@ -41,6 +41,7 @@ INACTIVE_WEIGHTS: dict[Signal, int] = {
     "few_posts": 1,
     "empty_bio": 1,
 }
+FEW_POSTS = 10
 FAKE_MIN_BOT = 3
 FAKE_MIN_TOTAL = 5
 GHOST_MIN_INACTIVE = 3
@@ -73,7 +74,7 @@ def profile_signals(profile: Profile) -> list[Signal]:
     checks: list[tuple[Signal, bool]] = [
         ("no_avatar", profile.has_anonymous_profile_picture is True),
         ("no_posts", profile.media_count == 0),
-        ("few_posts", 1 <= profile.media_count <= 2),
+        ("few_posts", 1 <= profile.media_count < FEW_POSTS),
         (
             "follow_ratio",
             following >= 500 and following >= 10 * max(followers, 1),
@@ -100,9 +101,10 @@ def classify(
     total = bot + inactive
     if verified:
         return "real", total
-    if bot >= FAKE_MIN_BOT and total >= FAKE_MIN_TOTAL:
-        return "fake", total
     posted_little = "no_posts" in signals or "few_posts" in signals
+    looks_unused = posted_little or "no_avatar" in signals
+    if bot >= FAKE_MIN_BOT and total >= FAKE_MIN_TOTAL and looks_unused:
+        return "fake", total
     if inactive >= GHOST_MIN_INACTIVE and posted_little:
         return "ghost", total
     return "real", total
