@@ -15,7 +15,7 @@ Four Instagram jobs, one command each:
 - **`followers`**: who followed and who unfollowed since the last run.
 
 You never log in with your own Instagram account, so there is no account to get
-banned. The scraping runs on the [herascrape](https://herascrape.com) Instagram
+banned. The scraping runs on the [herascrape](https://herascrape.com/?utm_source=github&utm_medium=readme&utm_campaign=instagram-scraper) Instagram
 API, which is maintained for you when Instagram changes something.
 
 ```bash
@@ -36,7 +36,7 @@ the library in a project.
 
 ## API key and cost
 
-Create a key at [herascrape.com/api-keys](https://herascrape.com/api-keys) and
+Create a key at [herascrape.com/api-keys](https://herascrape.com/api-keys?utm_source=github&utm_medium=readme&utm_campaign=instagram-scraper) and
 put it in `HERASCRAPE_API_KEY` (or pass `--api-key`). New accounts get $1 of free
 balance, about 2,500 calls, once Telegram is connected. That covers 23 fake
 follower checks or 400 audits.

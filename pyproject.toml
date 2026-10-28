@@ -1,12 +1,11 @@
 [build-system]
-requires = ["hatchling>=1.27"]
+requires = ["hatchling>=1.27", "hatch-fancy-pypi-readme>=24"]
 build-backend = "hatchling.build"
 
 [project]
 name = "instagram-scrapers"
-dynamic = ["version"]
+dynamic = ["version", "readme"]
 description = "Instagram scraper CLI: fake follower checker, giveaway comment picker, account audit and follower tracker. No login, no ban."
-readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -67,8 +66,27 @@ package = true
 [tool.hatch.version]
 path = "instagram_scrapers/__init__.py"
 
+# PyPI gets the README with PyPI link tags and absolute links.
+[tool.hatch.metadata.hooks.fancy-pypi-readme]
+content-type = "text/markdown"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.fragments]]
+path = "README.md"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = "utm_source=github"
+replacement = "utm_source=pypi"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '\]\(#'
+replacement = "](https://github.com/herascrape/instagram-scraper#"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '\]\((?!https?://)([^)]+)\)'
+replacement = '](https://github.com/herascrape/instagram-scraper/blob/main/\1)'
+
 [tool.hatch.build.targets.sdist]
-include = ["/instagram_scrapers"]
+include = ["/instagram_scrapers", "/README.md"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["instagram_scrapers"]
