@@ -222,3 +222,62 @@ def test_followers_baseline_then_diff(api: FakeAPI, tmp_path: Path) -> None:
         ("followed", "newfan"),
         ("unfollowed", "fan"),
     ]
+
+
+def test_followers_help_states_the_real_cost() -> None:
+    result = runner.invoke(app, ["followers", "--help"])
+    assert "1,600 calls" in " ".join(result.stdout.split())
+
+
+def test_giveaway_unknown_must_follow_names_the_handle(api: FakeAPI) -> None:
+    _giveaway_api(api)
+    api.error(
+        "/users/username/sponsor", status=404, error_code="profile_not_found"
+    )
+    args = ["giveaway", "DQSPu0hE_pP", "--must-follow", "sponsor"]
+    result = runner.invoke(app, args)
+    assert result.exit_code == 1
+    assert "@sponsor" in result.stderr
+    assert "--must-follow" in result.stderr
+
+
+def test_output_folder_must_exist_before_any_call(api: FakeAPI) -> None:
+    result = runner.invoke(
+        app, ["audit", "bakery", "-o", "/no-such-folder-x/a.md"]
+    )
+    assert result.exit_code == 2
+    assert "no-such-folder-x" in result.stderr
+    assert api.requests == []
+
+
+def test_db_that_is_a_folder_is_a_message(api: FakeAPI, tmp_path: Path) -> None:
+    api.route(
+        "/users/username/bakery", full_profile("9", "bakery", followers=1)
+    )
+    result = runner.invoke(app, ["followers", "bakery", "--db", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "snapshot database" in result.stderr
+    assert "Traceback" not in result.output
+    assert "API calls" in result.stderr
+
+
+def test_report_is_printed_even_if_writing_fails(
+    api: FakeAPI, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api.route("/users/username/bakery", full_profile("9", "bakery"))
+    api.route("/users/9/posts", grid_page([post_detail("1")], cursor=None))
+    api.route(
+        "/users/9/followers",
+        list_page([compact_user("1", "fan")], next_cursor=None),
+    )
+
+    def broken(*args: object, **kwargs: object) -> None:
+        raise PermissionError(13, "Permission denied", str(tmp_path / "a.md"))
+
+    monkeypatch.setattr(cli, "write_outputs", broken)
+    result = runner.invoke(
+        app, ["audit", "bakery", "-o", str(tmp_path / "a.md")]
+    )
+    assert result.exit_code == 1
+    assert "Instagram audit" in result.stdout
+    assert "Permission denied" in result.stderr

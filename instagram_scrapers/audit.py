@@ -424,10 +424,16 @@ def _audience_markdown(report: AuditReport) -> list[str]:
     lines += md_table(
         ["Signal", "Share"],
         [
-            ["No profile picture", percent(audience.no_avatar_share, 1)],
-            ["Private", percent(audience.private_share, 1)],
-            ["Username looks generated", percent(audience.generated_share, 1)],
-            ["Verified", percent(audience.verified_share, 1)],
+            [
+                "No profile picture",
+                percent(part=audience.no_avatar_share, whole=1),
+            ],
+            ["Private", percent(part=audience.private_share, whole=1)],
+            [
+                "Username looks generated",
+                percent(part=audience.generated_share, whole=1),
+            ],
+            ["Verified", percent(part=audience.verified_share, whole=1)],
         ],
         align="lr",
     )
@@ -438,7 +444,11 @@ def _audience_markdown(report: AuditReport) -> list[str]:
         lines += md_table(
             ["", "Followers", "Share"],
             [
-                [label, f"{counts[c]:,}", percent(counts[c], checked)]
+                [
+                    label,
+                    f"{counts[c]:,}",
+                    percent(part=counts[c], whole=checked),
+                ]
                 for c, label in CATEGORY_LABELS.items()
             ],
             align="lrr",

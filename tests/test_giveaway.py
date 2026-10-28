@@ -2,11 +2,14 @@ import hashlib
 from datetime import datetime, timezone
 from typing import cast
 
+import pytest
+
 from instagram_scrapers.client import open_client
 from instagram_scrapers.giveaway import (
     GiveawayResult,
     GiveawayRules,
     Ticket,
+    UnknownAccountError,
     entries_digest,
     estimate_giveaway_calls,
     rank_key,
@@ -107,7 +110,9 @@ def test_rank_key_known_value() -> None:
 
 
 def test_estimate_giveaway_calls() -> None:
-    assert estimate_giveaway_calls(POST) == 1 + 4
+    assert estimate_giveaway_calls(post=POST, rules=GiveawayRules()) == 1 + 4
+    checked = GiveawayRules(must_follow=["bakery"], max_check_calls=300)
+    assert estimate_giveaway_calls(post=POST, rules=checked) == 1 + 4 + 300
 
 
 async def test_filters() -> None:
@@ -342,3 +347,45 @@ async def test_rejected_account_is_not_checked_twice() -> None:
     assert result.winners == []
     assert len(result.rejected) == 1
     assert api.paths("/users/1") == ["/users/1"]
+
+
+async def test_markdown_publishes_seed_hash_and_scan_limit() -> None:
+    rules = GiveawayRules(winners=1, backups=0, must_follow=["bakery"])
+    result = await _draw(_api([]), rules, seed="s")
+    text = result.markdown()
+    assert hashlib.sha256(b"s").hexdigest() in text
+    assert result.seed_sha256 == hashlib.sha256(b"s").hexdigest()
+    assert (
+        "Winner follows @bakery; drawn accounts that follow more than 2,000 "
+        "accounts are skipped"
+    ) in text
+
+
+async def test_check_spend_is_capped() -> None:
+    comments = _fans(10)
+    api = _api(comments)
+    for c in comments:
+        user = cast(JSON, c["user"])
+        api.route(
+            f"/users/{user['pk']}", full_profile(str(user["pk"]), followers=5)
+        )
+    rules = GiveawayRules(
+        winners=1, backups=0, min_followers=100, max_check_calls=3
+    )
+    result = await _draw(api, rules)
+    assert result.winners == []
+    assert result.check_calls == 3
+    assert result.checks_stopped is True
+    assert len([p for p in api.paths("/users/") if p.count("/") == 2]) == 3
+    assert "Stopped checking drawn accounts after 3 calls" in result.markdown()
+
+
+async def test_unknown_must_follow_fails_before_fetching_comments() -> None:
+    api = _api(_fans(3))
+    api.error(
+        "/users/username/nobody", status=404, error_code="profile_not_found"
+    )
+    rules = GiveawayRules(must_follow=["nobody"])
+    with pytest.raises(UnknownAccountError, match="nobody"):
+        await _draw(api, rules)
+    assert api.paths("/posts/") == []

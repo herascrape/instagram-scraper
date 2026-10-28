@@ -141,6 +141,7 @@ class Walk(BaseModel):
 
     accounts: list[Account]
     passes: int
+    pages: int
     complete: bool
 
 
@@ -290,27 +291,26 @@ async def _list_pass(
     limit: int | None,
     stop_when: Callable[[set[str]], bool] | None = None,
     on_progress: OnProgress | None = None,
-) -> list[Account]:
+) -> tuple[list[Account], int]:
     """One walk over a follower or following list, deduplicated by pk.
 
-    Instagram reorders these lists between requests, so pages overlap; a
-    page that adds nothing new ends the walk.
+    Instagram reorders these lists between requests, so pages overlap and
+    a whole page can repeat; only the cursor ends the walk.
     """
     fetch = (
         client.user_followers if edge == "followers" else client.user_following
     )
     seen: dict[str, Account] = {}
     cursor: str | None = None
+    pages = 0
     while True:
         page = await _page(partial(fetch, user_pk, cursor=cursor))
-        added = 0
+        pages += 1
         for item in cast("list[JSON]", page.get("items") or []):
             account = Account.from_api(item)
-            if account.pk not in seen:
-                seen[account.pk] = account
-                added += 1
+            seen.setdefault(account.pk, account)
             if limit is not None and len(seen) >= limit:
-                return list(seen.values())
+                return list(seen.values()), pages
         if on_progress:
             on_progress(len(seen))
         next_cursor = page.get("next_cursor")
@@ -318,9 +318,9 @@ async def _list_pass(
             (stop_when and stop_when(set(seen)))
             or not page.get("has_more")
             or not isinstance(next_cursor, str)
-            or not added
+            or next_cursor == cursor
         ):
-            return list(seen.values())
+            return list(seen.values()), pages
         cursor = next_cursor
 
 
@@ -332,7 +332,7 @@ async def fetch_followers(
     on_progress: OnProgress | None = None,
 ) -> FollowerList:
     """The first `limit` unique followers Instagram lists (all if None)."""
-    accounts = await _list_pass(
+    accounts, _ = await _list_pass(
         client,
         edge="followers",
         user_pk=profile.pk,
@@ -360,7 +360,7 @@ async def walk_until_complete(
     `expected`, or when the first pass is cut short (business accounts).
     """
     union: dict[str, Account] = {}
-    passes = 0
+    passes = pages = 0
 
     def found(pks: set[str]) -> bool:
         return stop_when is not None and stop_when(pks | set(union))
@@ -368,9 +368,11 @@ async def walk_until_complete(
     while passes < max_passes:
         passes += 1
         before = len(union)
-        for account in await _list_pass(
+        accounts, pass_pages = await _list_pass(
             client, edge=edge, user_pk=user_pk, limit=None, stop_when=found
-        ):
+        )
+        pages += pass_pages
+        for account in accounts:
             union.setdefault(account.pk, account)
         if on_progress:
             on_progress(len(union))
@@ -385,6 +387,7 @@ async def walk_until_complete(
     return Walk(
         accounts=list(union.values()),
         passes=passes,
+        pages=pages,
         complete=len(union) >= COMPLETE_SHARE * expected,
     )
 
@@ -406,7 +409,11 @@ async def fetch_posts(
             if post is not None and len(posts) < limit:
                 posts.append(post)
         next_cursor = feed.get("profile_grid_items_cursor")
-        if not feed.get("more_available") or not isinstance(next_cursor, str):
+        if (
+            not feed.get("more_available")
+            or not isinstance(next_cursor, str)
+            or next_cursor == cursor
+        ):
             break
         cursor = next_cursor
     return posts

@@ -1,4 +1,5 @@
 import asyncio
+import sqlite3
 import sys
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
@@ -16,6 +17,7 @@ from herascrape import (
     ProfileNotFoundError,
     RateLimitError,
 )
+from pydantic import ValidationError
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.progress import (
@@ -41,6 +43,7 @@ from .followers import (
 from .giveaway import (
     GiveawayResult,
     GiveawayRules,
+    UnknownAccountError,
     estimate_giveaway_calls,
     run_giveaway,
 )
@@ -186,6 +189,11 @@ async def _execute(job: Job[R], *, client: AsyncClient, label: str) -> R:
 
 
 def _error_message(exc: Exception, *, target: str) -> str:
+    if isinstance(exc, UnknownAccountError):
+        return (
+            f"@{exc.username}: no public Instagram profile by that name "
+            "(from --must-follow)."
+        )
     if isinstance(exc, (PrivateProfileError, PrivateAccountError)):
         return (
             f"{target} is private. Private accounts can't be read without "
@@ -234,18 +242,41 @@ def _run(
         _fail(NO_KEY, code=2)
     try:
         result = asyncio.run(_execute(job, client=client, label=label))
-    except (HerascrapeError, PrivateProfileError) as exc:
+    except (HerascrapeError, PrivateProfileError, UnknownAccountError) as exc:
         _print_usage(counter.usage())
         _fail(_error_message(exc, target=target), code=1)
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        _print_usage(counter.usage())
+        _fail(_local_error_message(exc), code=1)
     result.usage = counter.usage()
-    write_outputs(result, paths=paths)
     if as_json:
         typer.echo(result.model_dump_json(indent=2))
     else:
         out.print(Markdown(result.markdown()))
+    try:
+        write_outputs(result, paths=paths)
+    except OSError as exc:
+        _print_usage(result.usage)
+        _fail(_local_error_message(exc), code=1)
     for path in paths:
         err.print(f"Wrote {path}")
     _print_usage(result.usage)
+
+
+def _local_error_message(exc: Exception) -> str:
+    if isinstance(exc, sqlite3.Error):
+        return f"Can't use the snapshot database: {exc}"
+    if isinstance(exc, ValidationError):
+        return (
+            "Instagram returned data in a shape this version can't read. "
+            "Please open an issue at "
+            "https://github.com/herascrape/instagram-scraper/issues with the "
+            "command you ran."
+        )
+    if isinstance(exc, OSError):
+        where = f": {exc.filename}" if exc.filename else ""
+        return f"{exc.strerror or exc}{where}"
+    return str(exc)
 
 
 def _print_usage(usage: Usage) -> None:
@@ -388,6 +419,14 @@ def giveaway(
             "times).",
         ),
     ] = 2000,
+    max_check_calls: Annotated[
+        int,
+        typer.Option(
+            min=1,
+            help="Stop checking drawn accounts after this many calls "
+            "(winner checks only; the comment fetch is separate).",
+        ),
+    ] = 1000,
     seed: Annotated[
         str | None,
         typer.Option(
@@ -421,11 +460,14 @@ def giveaway(
         require_avatar=require_avatar,
         must_follow=[_username(name) for name in must_follow or []],
         max_following_to_scan=follow_scan_limit,
+        max_check_calls=max_check_calls,
     )
 
     async def job(client: AsyncClient, session: Session) -> GiveawayResult:
         info = await get_post(client, ref=ref)
-        session.confirm_budget(estimate=estimate_giveaway_calls(info), yes=yes)
+        session.confirm_budget(
+            estimate=estimate_giveaway_calls(post=info, rules=rules), yes=yes
+        )
         return await run_giveaway(
             client,
             post=info,
@@ -531,7 +573,8 @@ def followers(
     """Who followed and unfollowed since the last run.
 
     Saves a snapshot of the full follower list and compares it with the
-    previous one. One call per 25 followers (10,000: 400 calls, $0.16).
+    previous one. The list is read about 4 times, 1 call per 25 followers
+    each time (10,000 followers: about 1,600 calls, $0.64).
     """
     name = _username(username)
     path = db or default_db_path()

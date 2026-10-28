@@ -6,7 +6,12 @@ from collections import Counter
 from collections.abc import Sequence
 from datetime import datetime, timezone
 
-from herascrape import AsyncClient, NotFoundError, PrivateAccountError
+from herascrape import (
+    AsyncClient,
+    NotFoundError,
+    PrivateAccountError,
+    ProfileNotFoundError,
+)
 from pydantic import BaseModel, Field, computed_field, field_validator
 
 from .client import Usage
@@ -46,6 +51,7 @@ class GiveawayRules(BaseModel):
     require_avatar: bool = False
     must_follow: list[str] = []
     max_following_to_scan: int = 2000
+    max_check_calls: int = 1000
 
     @field_validator("until")
     @classmethod
@@ -62,6 +68,14 @@ class GiveawayRules(BaseModel):
             or self.require_avatar
             or self.must_follow
         )
+
+
+class UnknownAccountError(Exception):
+    """A `must_follow` handle has no public profile."""
+
+    def __init__(self, username: str) -> None:
+        super().__init__(f"@{username} has no public profile")
+        self.username = username
 
 
 class Ticket(BaseModel):
@@ -98,10 +112,17 @@ class GiveawayResult(BaseModel):
     winners: list[Candidate]
     backups: list[Candidate]
     rejected: list[Candidate]
+    check_calls: int = 0
+    checks_stopped: bool = False
     drawn_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
     usage: Usage | None = None
+
+    @computed_field
+    @property
+    def seed_sha256(self) -> str:
+        return hashlib.sha256(self.seed.encode()).hexdigest()
 
     @computed_field
     @property
@@ -155,11 +176,14 @@ def rank_key(*, seed: str, comment_pk: str) -> str:
     return hashlib.sha256(f"{seed}:{comment_pk}".encode()).hexdigest()
 
 
-def estimate_giveaway_calls(post: PostInfo) -> int:
-    """Upper bound: Instagram's comment count includes replies."""
-    return 1 + estimate_calls(
+def estimate_giveaway_calls(*, post: PostInfo, rules: GiveawayRules) -> int:
+    """Upper bound: Instagram's comment count includes replies, and winner
+    checks may spend up to `max_check_calls`."""
+    comments = estimate_calls(
         items=post.comment_count, page_size=COMMENTS_PAGE_SIZE
     )
+    checks = rules.max_check_calls if rules.checks_profiles else 0
+    return 1 + comments + checks
 
 
 async def run_giveaway(
@@ -171,6 +195,7 @@ async def run_giveaway(
     on_progress: OnProgress | None = None,
 ) -> GiveawayResult:
     """Fetch every top-level comment, filter, and draw."""
+    follow_targets = await _resolve_targets(client, post=post, rules=rules)
     comments = await fetch_comments(client, post=post, on_progress=on_progress)
     tickets = _tickets(comments, post=post, rules=rules)
     eligible = [t for t in tickets if t.eligible]
@@ -180,20 +205,25 @@ async def run_giveaway(
     )
     for position, ticket in enumerate(ranked, start=1):
         ticket.rank = position
-    follow_targets = await _resolve_targets(client, post=post, rules=rules)
     winners: list[Candidate] = []
     backups: list[Candidate] = []
     rejected: list[Candidate] = []
     seen_users: set[str] = set()
+    check_calls = 0
+    checks_stopped = False
     for ticket in ranked:
         if len(winners) + len(backups) >= rules.winners + rules.backups:
             break
         if ticket.user.pk in seen_users:
             continue
+        if rules.checks_profiles and check_calls >= rules.max_check_calls:
+            checks_stopped = True
+            break
         seen_users.add(ticket.user.pk)
-        reason = await _check(
+        reason, calls = await _check(
             client, ticket=ticket, rules=rules, targets=follow_targets
         )
+        check_calls += calls
         if reason:
             rejected.append(
                 Candidate(ticket=ticket, accepted=False, reason=reason)
@@ -211,6 +241,8 @@ async def run_giveaway(
         winners=winners,
         backups=backups,
         rejected=rejected,
+        check_calls=check_calls,
+        checks_stopped=checks_stopped,
     )
 
 
@@ -292,7 +324,10 @@ async def _resolve_targets(
         if name == post.owner.username.lower():
             targets[name] = post.owner.pk
         else:
-            targets[name] = (await get_profile(client, username=name)).pk
+            try:
+                targets[name] = (await get_profile(client, username=name)).pk
+            except ProfileNotFoundError as exc:
+                raise UnknownAccountError(name) from exc
     return targets
 
 
@@ -302,30 +337,32 @@ async def _check(
     ticket: Ticket,
     rules: GiveawayRules,
     targets: dict[str, str],
-) -> str | None:
-    """Why a drawn ticket fails the profile checks, or None if it passes."""
+) -> tuple[str | None, int]:
+    """Why a drawn ticket fails the checks (None if it passes), and the
+    billed calls the checks made."""
     if not rules.checks_profiles:
-        return None
+        return None, 0
     try:
         profile = await get_profile_by_pk(client, pk=ticket.user.pk)
     except (NotFoundError, PrivateAccountError):
-        return "account unavailable"
+        return "account unavailable", 0
     if profile.follower_count < rules.min_followers:
-        return f"followers {profile.follower_count:,} < {rules.min_followers:,}"
+        need = f"{profile.follower_count:,} < {rules.min_followers:,}"
+        return f"followers {need}", 1
     if profile.media_count < rules.min_posts:
-        return f"posts {profile.media_count:,} < {rules.min_posts:,}"
+        return f"posts {profile.media_count:,} < {rules.min_posts:,}", 1
     if rules.require_avatar and profile.has_anonymous_profile_picture:
-        return "no profile picture"
+        return "no profile picture", 1
     if not targets:
-        return None
+        return None, 1
     if profile.is_private:
-        return "private, can't verify follows"
+        return "private, can't verify follows", 1
     limit = rules.max_following_to_scan
     if profile.following_count > limit:
         return (
             f"follows {profile.following_count:,} accounts, more than the "
             f"{limit:,} checked"
-        )
+        ), 1
     wanted = set(targets.values())
     walk = await walk_until_complete(
         client,
@@ -334,17 +371,18 @@ async def _check(
         expected=profile.following_count,
         stop_when=lambda pks: wanted <= pks,
     )
+    calls = 1 + walk.pages
     seen = {account.pk for account in walk.accounts}
     missing = [name for name, pk in targets.items() if pk not in seen]
     if not missing:
-        return None
+        return None, calls
     names = ", ".join(f"@{name}" for name in missing)
     if not walk.complete:
         return (
             f"{names} not among the {len(seen):,} of "
             f"{profile.following_count:,} follows Instagram listed"
-        )
-    return f"doesn't follow {names}"
+        ), calls
+    return f"doesn't follow {names}", calls
 
 
 def _short(text: str) -> str:
@@ -407,6 +445,12 @@ def _markdown(result: GiveawayResult) -> str:
             [[reason, f"{n:,}"] for reason, n in reasons.most_common()],
             align="lr",
         )
+    if result.checks_stopped:
+        lines += [
+            "",
+            f"Stopped checking drawn accounts after {result.check_calls:,} "
+            "calls, the limit for winner checks. Raise it to keep drawing.",
+        ]
     if result.rejected:
         lines += ["", "Drawn but rejected by the checks:", ""]
         lines += md_table(
@@ -427,6 +471,7 @@ def _markdown(result: GiveawayResult) -> str:
         "## Verify this draw",
         "",
         f"- Seed: `{result.seed}`",
+        f"- Seed SHA-256: `{result.seed_sha256}`",
         f"- Entries digest (SHA-256): `{result.entries_digest}`",
         f"- Method: {result.method}",
         "",
@@ -438,15 +483,17 @@ def _markdown(result: GiveawayResult) -> str:
 
 
 def _rules(rules: GiveawayRules) -> list[str]:
-    entries = plural(rules.max_entries_per_user, "entry", "entries")
+    entries = plural(
+        count=rules.max_entries_per_user, word="entry", many="entries"
+    )
     lines = [
-        f"{plural(rules.winners, 'winner')} and "
-        f"{plural(rules.backups, 'backup')}; one win per account",
+        f"{plural(count=rules.winners, word='winner')} and "
+        f"{plural(count=rules.backups, word='backup')}; one win per account",
         f"Up to {entries} per account",
         "Host and co-authors excluded",
     ]
     if rules.min_mentions:
-        tagged = plural(rules.min_mentions, "other account")
+        tagged = plural(count=rules.min_mentions, word="other account")
         lines.append(f"At least {tagged} tagged")
     lines += [f"Comment contains {k}" for k in rules.keywords]
     if rules.until:
@@ -460,5 +507,9 @@ def _rules(rules: GiveawayRules) -> list[str]:
         lines.append(f"Winner has at least {rules.min_posts:,} posts")
     if rules.require_avatar:
         lines.append("Winner has a profile picture")
-    lines += [f"Winner follows @{n}" for n in rules.must_follow]
+    lines += [
+        f"Winner follows @{n}; drawn accounts that follow more than "
+        f"{rules.max_following_to_scan:,} accounts are skipped"
+        for n in rules.must_follow
+    ]
     return lines

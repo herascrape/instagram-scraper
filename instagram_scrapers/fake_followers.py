@@ -147,7 +147,11 @@ def _markdown(report: FakeFollowerReport) -> str:
     lines += md_table(
         ["", "Followers", "Share"],
         [
-            [label, f"{report.counts[c]:,}", percent(report.counts[c], checked)]
+            [
+                label,
+                f"{report.counts[c]:,}",
+                percent(part=report.counts[c], whole=checked),
+            ]
             for c, label in CATEGORY_LABELS.items()
         ],
         align="lrr",

@@ -27,7 +27,7 @@ def md_table(
     ]
 
 
-def percent(part: float, whole: float) -> str:
+def percent(*, part: float, whole: float) -> str:
     if not whole:
         return "n/a"
     share = 100 * part / whole
@@ -38,9 +38,9 @@ def cap_note(*, profile: Profile, listed: int) -> str:
     """Why fewer followers were listed than the profile counts."""
     if profile.is_business or profile.is_verified or profile.account_type == 2:
         return (
-            f"Instagram lists only {listed} followers of this "
-            "account (it does this for business and verified accounts), so "
-            "the results cover those."
+            f"Instagram lists only {listed:,} followers of this account (it "
+            "limits some business and verified accounts), so the results "
+            "cover those."
         )
     return (
         f"Instagram listed {listed:,} of {profile.follower_count:,} "
@@ -48,7 +48,7 @@ def cap_note(*, profile: Profile, listed: int) -> str:
     )
 
 
-def plural(count: int, word: str, many: str | None = None) -> str:
+def plural(*, count: int, word: str, many: str | None = None) -> str:
     return f"{count:,} {word if count == 1 else many or word + 's'}"
 
 

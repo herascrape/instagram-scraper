@@ -44,5 +44,5 @@ def open_client(
 ) -> tuple[AsyncClient, CountingTransport]:
     """An async herascrape client plus the counter of its billed calls."""
     counter = CountingTransport(inner)
-    client = AsyncClient(api_key, timeout=30.0, transport=counter)
+    client = AsyncClient(api_key=api_key, timeout=30.0, transport=counter)
     return client, counter

@@ -150,13 +150,35 @@ async def test_fetch_followers_dedupes_overlapping_pages() -> None:
     assert counter.calls == 2
 
 
-async def test_fetch_followers_stops_on_a_page_with_nothing_new() -> None:
+async def test_list_pass_keeps_going_past_an_all_duplicate_page() -> None:
+    api = FakeAPI()
+    first = [compact_user(str(n)) for n in range(25)]
+    third = [compact_user(str(n)) for n in range(25, 30)]
+    api.route("/users/9/followers", list_page(first, next_cursor="c1"))
+    api.route(
+        "/users/9/followers",
+        list_page(first, next_cursor="c2"),
+        query={"cursor": "c1"},
+    )
+    api.route(
+        "/users/9/followers",
+        list_page(third, next_cursor=None),
+        query={"cursor": "c2"},
+    )
+    client, _ = open_client(api_key="hs_test", inner=api.transport())
+    async with client:
+        result = await fetch_followers(client, profile=_profile(30), limit=None)
+    assert len(result.accounts) == 30
+    assert result.capped is False
+
+
+async def test_list_pass_stops_on_a_repeated_cursor() -> None:
     api = FakeAPI()
     first = [compact_user(str(n)) for n in range(25)]
     api.route("/users/9/followers", list_page(first, next_cursor="c1"))
     api.route(
         "/users/9/followers",
-        list_page(first, next_cursor="c2"),
+        list_page(first, next_cursor="c1"),
         query={"cursor": "c1"},
     )
     client, counter = open_client(api_key="hs_test", inner=api.transport())
@@ -165,7 +187,22 @@ async def test_fetch_followers_stops_on_a_page_with_nothing_new() -> None:
             client, profile=_profile(5000), limit=None
         )
     assert len(result.accounts) == 25
-    assert result.capped is True
+    assert counter.calls == 2
+
+
+async def test_fetch_posts_stops_on_a_repeated_cursor() -> None:
+    api = FakeAPI()
+    pinned = post_detail("1")
+    api.route("/users/9/posts", grid_page([pinned], cursor="g1", pinned={"1"}))
+    api.route(
+        "/users/9/posts",
+        grid_page([pinned], cursor="g1", pinned={"1"}),
+        query={"cursor": "g1"},
+    )
+    client, counter = open_client(api_key="hs_test", inner=api.transport())
+    async with client:
+        posts = await fetch_posts(client, user_pk="9", limit=24)
+    assert posts == []
     assert counter.calls == 2
 
 

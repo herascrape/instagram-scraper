@@ -12,17 +12,18 @@ def test_md_table_escapes_cells() -> None:
 
 
 def test_percent() -> None:
-    assert percent(1, 3) == "33%"
-    assert percent(0, 0) == "n/a"
-    assert percent(1, 300) == "0.3%"
+    assert percent(part=1, whole=3) == "33%"
+    assert percent(part=0, whole=0) == "n/a"
+    assert percent(part=1, whole=300) == "0.3%"
 
 
 def test_cap_note_business() -> None:
     brand = Profile.from_api(
         full_profile("1", "brand", followers=268_000_000, account_type=2)
     )
-    assert "only 45 followers" in cap_note(profile=brand, listed=45)
-    assert "business and verified" in cap_note(profile=brand, listed=45)
+    note = cap_note(profile=brand, listed=1365)
+    assert "only 1,365 followers" in note
+    assert "some business and verified accounts" in note
 
 
 def test_cap_note_personal() -> None:
@@ -33,6 +34,6 @@ def test_cap_note_personal() -> None:
 
 
 def test_plural() -> None:
-    assert plural(1, "winner") == "1 winner"
-    assert plural(2, "entry", "entries") == "2 entries"
-    assert plural(1_000, "account") == "1,000 accounts"
+    assert plural(count=1, word="winner") == "1 winner"
+    assert plural(count=2, word="entry", many="entries") == "2 entries"
+    assert plural(count=1_000, word="account") == "1,000 accounts"

@@ -44,3 +44,30 @@ def test_empty_rows_write_an_empty_csv(tmp_path: Path) -> None:
     path = tmp_path / "r.csv"
     write_outputs(Empty(name="x"), paths=[path])
     assert path.read_text(encoding="utf-8-sig") == ""
+
+
+def test_csv_neutralizes_formula_cells(tmp_path: Path) -> None:
+    class Risky(_Result):
+        def csv_rows(self) -> list[Row]:
+            return [
+                {"text": '=HYPERLINK("http://x")', "n": -5},
+                {"text": "+1 me", "n": 0},
+                {"text": "-x", "n": 1},
+                {"text": "@friend win", "n": 2},
+                {"text": "\tx", "n": 3},
+                {"text": "plain", "n": 4},
+            ]
+
+    path = tmp_path / "r.csv"
+    write_outputs(Risky(name="x"), paths=[path])
+    with path.open(encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [r["text"] for r in rows] == [
+        '\'=HYPERLINK("http://x")',
+        "'+1 me",
+        "'-x",
+        "'@friend win",
+        "'\tx",
+        "plain",
+    ]
+    assert rows[0]["n"] == "-5"
