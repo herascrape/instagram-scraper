@@ -9,7 +9,7 @@ from typing import Literal
 
 from herascrape import AsyncClient
 from platformdirs import user_data_dir
-from pydantic import BaseModel
+from pydantic import BaseModel, computed_field
 
 from .client import Usage
 from .export import Row
@@ -26,6 +26,10 @@ from .report import cap_note, footer, plural
 SCHEMA_VERSION = 1
 # Measured: a reshuffled list is complete after 3 to 5 passes.
 TYPICAL_PASSES = 4
+RECHECK_PASSES = 3
+# Net change vs the profile's count change that is worth flagging.
+MISMATCH_MIN = 3
+MISMATCH_SHARE = 0.01
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS snapshots (
     id INTEGER PRIMARY KEY,
@@ -77,6 +81,20 @@ class FollowerDiff(BaseModel):
     changes_reported: bool
     passes: int
     usage: Usage | None = None
+
+    @computed_field
+    @property
+    def count_mismatch(self) -> bool:
+        """The lists' net change disagrees with the profile's count."""
+        if self.previous is None or not self.changes_reported:
+            return False
+        observed = sum(
+            {"followed": 1, "unfollowed": -1}.get(c.change, 0)
+            for c in self.changes
+        )
+        expected = self.current.follower_count - self.previous.follower_count
+        slack = max(MISMATCH_MIN, MISMATCH_SHARE * self.current.follower_count)
+        return abs(expected - observed) > slack
 
     def csv_rows(self) -> list[Row]:
         return [
@@ -178,13 +196,13 @@ class SnapshotStore:
             complete=complete,
         )
 
-    def previous(self, *, user_pk: str, before_id: int) -> Snapshot | None:
-        """The latest snapshot of `user_pk` older than `before_id`."""
+    def latest_complete(self, *, user_pk: str) -> Snapshot | None:
+        """The newest snapshot of `user_pk` that saw the whole list."""
         row = self._conn.execute(
             "SELECT id, user_pk, username, taken_at, follower_count, fetched,"
-            " complete FROM snapshots WHERE user_pk = ? AND id < ?"
+            " complete FROM snapshots WHERE user_pk = ? AND complete = 1"
             " ORDER BY id DESC LIMIT 1",
-            (user_pk, before_id),
+            (user_pk,),
         ).fetchone()
         if row is None:
             return None
@@ -258,10 +276,11 @@ async def track_followers(
     store: SnapshotStore,
     on_progress: OnProgress | None = None,
 ) -> FollowerDiff:
-    """Save a full follower snapshot and diff it with the previous one.
+    """Save a full follower snapshot and diff it with the last complete one.
 
     Instagram reorders follower lists between requests, so the list is read
-    in repeated passes until it stops growing.
+    in repeated passes until it stops growing, and anyone who seems to have
+    unfollowed is looked for again before being reported.
     """
     walk = await walk_until_complete(
         client,
@@ -270,29 +289,44 @@ async def track_followers(
         expected=profile.follower_count,
         on_progress=on_progress,
     )
+    previous = store.latest_complete(user_pk=profile.pk)
+    accounts, passes = walk.accounts, walk.passes
+    before: list[Account] = []
+    comparable = previous is not None and walk.complete
+    if previous is not None and comparable:
+        before = store.accounts(snapshot_id=previous.id)
+        missing = {a.pk for a in before} - {a.pk for a in accounts}
+        if missing:
+            recheck = await walk_until_complete(
+                client,
+                edge="followers",
+                user_pk=profile.pk,
+                expected=profile.follower_count,
+                max_passes=RECHECK_PASSES,
+                stop_when=lambda pks: missing <= pks,
+                on_progress=on_progress,
+            )
+            passes += recheck.passes
+            accounts = accounts + [
+                a for a in recheck.accounts if a.pk in missing
+            ]
     current = store.save(
         profile=profile,
-        accounts=walk.accounts,
+        accounts=accounts,
         complete=walk.complete,
         taken_at=datetime.now(timezone.utc),
-    )
-    previous = store.previous(user_pk=profile.pk, before_id=current.id)
-    comparable = previous is not None and previous.complete and current.complete
-    changes = (
-        diff_accounts(
-            previous=store.accounts(snapshot_id=previous.id),
-            current=walk.accounts,
-        )
-        if comparable and previous
-        else []
     )
     return FollowerDiff(
         profile=profile,
         current=current,
         previous=previous,
-        changes=changes,
+        changes=(
+            diff_accounts(previous=before, current=accounts)
+            if comparable
+            else []
+        ),
         changes_reported=comparable,
-        passes=walk.passes,
+        passes=passes,
     )
 
 
@@ -311,12 +345,14 @@ def _section(title: str, changes: Sequence[FollowerChange]) -> list[str]:
 
 def _markdown(diff: FollowerDiff) -> str:
     profile, current = diff.profile, diff.current
+    passes = plural(count=diff.passes, word="pass", many="passes")
+    listed = plural(count=current.fetched, word="follower")
     lines = [
         f"# Follower changes: @{profile.username}",
         "",
         f"Snapshot {current.taken_at:%Y-%m-%d %H:%M} UTC: "
         f"{current.fetched:,} of {current.follower_count:,} followers, read "
-        f"in {plural(diff.passes, 'pass', 'passes')} (Instagram reorders the "
+        f"in {passes} (Instagram reorders the "
         "list between requests, so it is read until it stops growing).",
     ]
     if not current.complete:
@@ -325,25 +361,16 @@ def _markdown(diff: FollowerDiff) -> str:
             f"> {cap_note(profile=profile, listed=current.fetched)} Without "
             "the full list, follower changes can't be tracked.",
         ]
-    if diff.previous is None:
+    if diff.previous is None or not diff.changes_reported:
         if current.complete:
             lines += [
                 "",
-                f"Baseline saved: {plural(current.fetched, 'follower')}. Run "
-                "it again later to see who followed and unfollowed.",
+                f"Baseline saved: {listed}. Run it again later to see who "
+                "followed and unfollowed.",
             ]
         lines += ["", footer()]
         return "\n".join(lines) + "\n"
     since = f"{diff.previous.taken_at:%Y-%m-%d %H:%M} UTC"
-    if not diff.changes_reported:
-        if current.complete:
-            lines += [
-                "",
-                f"The snapshot from {since} was partial, so this one is the "
-                "new baseline.",
-            ]
-        lines += ["", footer()]
-        return "\n".join(lines) + "\n"
     by_kind = {
         kind: [c for c in diff.changes if c.change == kind]
         for kind in ("followed", "unfollowed", "renamed")
@@ -354,6 +381,14 @@ def _markdown(diff: FollowerDiff) -> str:
         f"{len(by_kind['unfollowed']):,} unfollowed, "
         f"{len(by_kind['renamed']):,} renamed.",
     ]
+    if diff.count_mismatch:
+        net = diff.current.follower_count - diff.previous.follower_count
+        lines += [
+            "",
+            f"> The profile's follower count changed by {net:+,}, but the "
+            "lists differ by more than that, so some changes may be missing "
+            "or false: Instagram does not always list every follower.",
+        ]
     lines += _section("New followers", by_kind["followed"])
     lines += _section("Unfollowed", by_kind["unfollowed"])
     lines += _section("Renamed", by_kind["renamed"])

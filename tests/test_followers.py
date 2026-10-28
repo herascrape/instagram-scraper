@@ -12,7 +12,7 @@ from instagram_scrapers.followers import (
     estimate_follower_calls,
     track_followers,
 )
-from instagram_scrapers.instagram import Account, Profile
+from instagram_scrapers.instagram import JSON, Account, Profile
 from tests.factories import compact_user, full_profile, list_page
 from tests.fakeapi import FakeAPI
 
@@ -47,8 +47,8 @@ def test_store_roundtrip(tmp_path: Path) -> None:
             complete=False,
             taken_at=T1,
         )
-        assert store.previous(user_pk="9", before_id=second.id) == first
-        assert store.previous(user_pk="9", before_id=first.id) is None
+        assert store.latest_complete(user_pk="9") == first
+        assert store.latest_complete(user_pk="other") is None
         assert [a.username for a in store.accounts(snapshot_id=first.id)] == [
             "a",
             "b",
@@ -162,3 +162,88 @@ async def test_complete_threshold(
 def test_estimate_follower_calls() -> None:
     assert estimate_follower_calls(_profile(10_000)) == 1_600
     assert estimate_follower_calls(_profile(100)) == 16
+
+
+def _names(n: int, *, skip: str | None = None) -> list[JSON]:
+    return [
+        compact_user(f"pk-u{i}", f"u{i}") for i in range(n) if f"u{i}" != skip
+    ]
+
+
+async def test_missing_follower_is_rechecked_before_reporting(
+    tmp_path: Path,
+) -> None:
+    api = FakeAPI()
+    api.route(
+        "/users/9/followers",
+        list_page(_names(50), next_cursor=None),
+        list_page(_names(50, skip="u49"), next_cursor=None),
+        list_page(_names(50, skip="u49"), next_cursor=None),
+        list_page(_names(50), next_cursor=None),
+    )
+    with SnapshotStore(path=tmp_path / "f.sqlite3") as store:
+        await _track(api, store, profile=_profile(50))
+        diff = await _track(api, store, profile=_profile(50))
+        saved = store.accounts(snapshot_id=diff.current.id)
+    assert diff.changes == []
+    assert diff.current.fetched == 50
+    assert "pk-u49" in {a.pk for a in saved}
+
+
+async def test_follower_still_missing_after_rechecks_is_reported(
+    tmp_path: Path,
+) -> None:
+    api = FakeAPI()
+    api.route(
+        "/users/9/followers",
+        list_page(_names(50), next_cursor=None),
+        list_page(_names(50, skip="u49"), next_cursor=None),
+    )
+    with SnapshotStore(path=tmp_path / "f.sqlite3") as store:
+        await _track(api, store, profile=_profile(50))
+        diff = await _track(api, store, profile=_profile(49))
+    assert [(c.change, c.account.username) for c in diff.changes] == [
+        ("unfollowed", "u49")
+    ]
+
+
+async def test_diff_uses_the_latest_complete_snapshot(tmp_path: Path) -> None:
+    api = FakeAPI()
+    api.route(
+        "/users/9/followers",
+        list_page(_names(3), next_cursor=None),
+        list_page(_names(1), next_cursor=None),
+        list_page(_names(3, skip="u0"), next_cursor=None),
+    )
+    with SnapshotStore(path=tmp_path / "f.sqlite3") as store:
+        first = await _track(api, store, profile=_profile(3))
+        partial = await _track(api, store, profile=_profile(3))
+        third = await _track(api, store, profile=_profile(2))
+    assert partial.current.complete is False
+    assert third.previous == first.current
+    assert [(c.change, c.account.username) for c in third.changes] == [
+        ("unfollowed", "u0")
+    ]
+
+
+async def test_count_mismatch_is_flagged(tmp_path: Path) -> None:
+    steady = FakeAPI()
+    steady.route("/users/9/followers", list_page(_names(100), next_cursor=None))
+    with SnapshotStore(path=tmp_path / "f.sqlite3") as store:
+        await _track(steady, store, profile=_profile(100))
+        diff = await _track(steady, store, profile=_profile(98))
+    assert diff.count_mismatch is False
+
+    api = FakeAPI()
+    api.route(
+        "/users/9/followers",
+        list_page(_names(980), next_cursor=None),
+        list_page(_names(980), next_cursor=None),
+        list_page(_names(1000), next_cursor=None),
+    )
+    with SnapshotStore(path=tmp_path / "g.sqlite3") as store:
+        await _track(api, store, profile=_profile(1000))
+        diff = await _track(api, store, profile=_profile(1000))
+    assert len(diff.changes) == 20
+    assert diff.count_mismatch is True
+    assert "some changes may be missing or false" in diff.markdown()
