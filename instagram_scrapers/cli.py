@@ -573,8 +573,9 @@ def followers(
     """Who followed and unfollowed since the last run.
 
     Saves a snapshot of the full follower list and compares it with the
-    previous one. The list is read about 4 times, 1 call per 25 followers
-    each time (10,000 followers: about 1,600 calls, $0.64).
+    previous one. The list is read up to 8 times at 1 call per 25 followers
+    (up to 5 reads find everyone, 3 more confirm unfollowers): 10,000
+    followers cost up to 3,200 calls ($1.28).
     """
     name = _username(username)
     path = db or default_db_path()

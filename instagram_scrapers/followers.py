@@ -15,6 +15,7 @@ from .client import Usage
 from .export import Row
 from .instagram import (
     FOLLOWERS_PAGE_SIZE,
+    MAX_PASSES,
     Account,
     OnProgress,
     Profile,
@@ -24,8 +25,6 @@ from .instagram import (
 from .report import cap_note, footer, plural
 
 SCHEMA_VERSION = 1
-# Measured: a reshuffled list is complete after 3 to 5 passes.
-TYPICAL_PASSES = 4
 RECHECK_PASSES = 3
 # Net change vs the profile's count change that is worth flagging.
 MISMATCH_MIN = 3
@@ -95,6 +94,14 @@ class FollowerDiff(BaseModel):
         expected = self.current.follower_count - self.previous.follower_count
         slack = max(MISMATCH_MIN, MISMATCH_SHARE * self.current.follower_count)
         return abs(expected - observed) > slack
+
+    @computed_field
+    @property
+    def possibly_earlier(self) -> int:
+        """New followers that may only have been missed last time."""
+        if self.previous is None or not self.changes_reported:
+            return 0
+        return max(0, self.previous.follower_count - self.previous.fetched)
 
     def csv_rows(self) -> list[Row]:
         return [
@@ -263,10 +270,11 @@ def diff_accounts(
 
 
 def estimate_follower_calls(profile: Profile) -> int:
+    """Worst case: every pass of the walk and of the unfollower re-check."""
     pages = estimate_calls(
         items=profile.follower_count, page_size=FOLLOWERS_PAGE_SIZE
     )
-    return pages * TYPICAL_PASSES
+    return pages * (MAX_PASSES + RECHECK_PASSES)
 
 
 async def track_followers(
@@ -390,6 +398,13 @@ def _markdown(diff: FollowerDiff) -> str:
             "or false: Instagram does not always list every follower.",
         ]
     lines += _section("New followers", by_kind["followed"])
+    if by_kind["followed"] and diff.possibly_earlier:
+        lines += [
+            "",
+            f"The {since} snapshot listed {diff.previous.fetched:,} of "
+            f"{diff.previous.follower_count:,} followers, so up to "
+            f"{diff.possibly_earlier:,} of these may have followed before it.",
+        ]
     lines += _section("Unfollowed", by_kind["unfollowed"])
     lines += _section("Renamed", by_kind["renamed"])
     lines += ["", footer()]

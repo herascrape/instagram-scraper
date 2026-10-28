@@ -195,7 +195,7 @@ def test_followers_budget_guard_non_interactive(api: FakeAPI) -> None:
     )
     result = runner.invoke(app, ["followers", "bakery"])
     assert result.exit_code == 2
-    assert "16,000 API calls" in result.stderr
+    assert "32,000 API calls" in result.stderr
     assert api.paths("/users/9/followers") == []
 
 
@@ -226,7 +226,7 @@ def test_followers_baseline_then_diff(api: FakeAPI, tmp_path: Path) -> None:
 
 def test_followers_help_states_the_real_cost() -> None:
     result = runner.invoke(app, ["followers", "--help"])
-    assert "1,600 calls" in " ".join(result.stdout.split())
+    assert "up to 3,200 calls" in " ".join(result.stdout.split())
 
 
 def test_giveaway_unknown_must_follow_names_the_handle(api: FakeAPI) -> None:

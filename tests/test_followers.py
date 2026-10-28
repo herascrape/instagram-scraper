@@ -160,8 +160,8 @@ async def test_complete_threshold(
 
 
 def test_estimate_follower_calls() -> None:
-    assert estimate_follower_calls(_profile(10_000)) == 1_600
-    assert estimate_follower_calls(_profile(100)) == 16
+    assert estimate_follower_calls(_profile(10_000)) == 3_200
+    assert estimate_follower_calls(_profile(100)) == 32
 
 
 def _names(n: int, *, skip: str | None = None) -> list[JSON]:
@@ -247,3 +247,21 @@ async def test_count_mismatch_is_flagged(tmp_path: Path) -> None:
     assert len(diff.changes) == 20
     assert diff.count_mismatch is True
     assert "some changes may be missing or false" in diff.markdown()
+
+
+async def test_new_followers_note_what_the_last_snapshot_missed(
+    tmp_path: Path,
+) -> None:
+    api = FakeAPI()
+    api.route(
+        "/users/9/followers",
+        list_page(_names(99), next_cursor=None),
+        list_page(_names(99), next_cursor=None),
+        list_page(_names(100), next_cursor=None),
+    )
+    with SnapshotStore(path=tmp_path / "f.sqlite3") as store:
+        await _track(api, store, profile=_profile(100))
+        diff = await _track(api, store, profile=_profile(100))
+    assert [c.account.username for c in diff.changes] == ["u99"]
+    assert diff.possibly_earlier == 1
+    assert "up to 1 of these may have followed before it" in diff.markdown()
