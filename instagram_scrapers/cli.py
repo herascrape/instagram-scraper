@@ -27,6 +27,7 @@ from rich.progress import (
 )
 
 from . import __version__
+from .audit import AuditReport, audit_account, check_tz
 from .client import PRICE_PER_CALL, Usage, open_client
 from .export import Exportable, check_outputs, write_outputs
 from .fake_followers import FakeFollowerReport, check_fake_followers
@@ -429,6 +430,69 @@ def giveaway(
         job,
         target=ref,
         label="Fetching comments",
+        api_key=api_key,
+        outputs=output,
+        as_json=as_json,
+    )
+
+
+@app.command()
+def audit(
+    username: Annotated[
+        str,
+        typer.Argument(
+            help="Account to audit: name, @name or profile URL.",
+            show_default=False,
+        ),
+    ],
+    posts: Annotated[
+        int,
+        typer.Option(min=1, max=240, help="Newest grid posts to analyze."),
+    ] = 24,
+    audience_sample: Annotated[
+        int,
+        typer.Option(min=1, max=1000, help="Newest followers to sample."),
+    ] = 50,
+    deep_audience: Annotated[
+        bool,
+        typer.Option(
+            help="Score each sampled follower as real, ghost or fake "
+            "(one profile call each).",
+        ),
+    ] = False,
+    tz: Annotated[
+        str,
+        typer.Option(help="Time zone for the best day and time tables."),
+    ] = "UTC",
+    api_key: ApiKey = None,
+    output: Outputs = None,
+    as_json: AsJson = False,
+) -> None:
+    """Audit an account: engagement, cadence, timing, content and audience.
+
+    Defaults cost about 6 calls ($0.003): 3 pages of posts, 2 of followers.
+    """
+    name = _username(username)
+    try:
+        check_tz(tz)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--tz") from exc
+
+    async def job(client: AsyncClient, session: Session) -> AuditReport:
+        target = await get_public_profile(client, username=name)
+        return await audit_account(
+            client,
+            profile=target,
+            posts=posts,
+            audience_sample=audience_sample,
+            deep_audience=deep_audience,
+            tz=tz,
+        )
+
+    _run(
+        job,
+        target=f"@{name}",
+        label="Auditing",
         api_key=api_key,
         outputs=output,
         as_json=as_json,

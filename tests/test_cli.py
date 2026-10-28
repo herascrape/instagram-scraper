@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import httpx
 import pytest
@@ -13,8 +14,10 @@ from tests.factories import (
     comments_page,
     compact_user,
     full_profile,
+    grid_page,
     list_page,
     post_body,
+    post_detail,
 )
 from tests.fakeapi import FakeAPI
 
@@ -163,3 +166,24 @@ def test_budget_guard_non_interactive(api: FakeAPI) -> None:
     assert "4,001 API calls" in result.stderr
     assert "--yes" in result.stderr
     assert api.paths("/posts/77/comments") == []
+
+
+def test_audit_markdown_output(api: FakeAPI, tmp_path: Path) -> None:
+    api.route("/users/username/bakery", full_profile("9", "bakery"))
+    api.route("/users/9/posts", grid_page([post_detail("1")], cursor=None))
+    api.route(
+        "/users/9/followers",
+        list_page([compact_user("1", "fan")], next_cursor=None),
+    )
+    report = tmp_path / "audit.md"
+    args = ["audit", "bakery", "--tz", "Europe/Kyiv", "-o", str(report)]
+    result = runner.invoke(app, args)
+    assert result.exit_code == 0, result.output
+    assert report.read_text().startswith("# Instagram audit: @bakery")
+    assert "Instagram audit" in result.stdout
+
+
+def test_audit_bad_tz(api: FakeAPI) -> None:
+    result = runner.invoke(app, ["audit", "bakery", "--tz", "Mars/Base"])
+    assert result.exit_code == 2
+    assert api.requests == []
