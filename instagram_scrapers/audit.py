@@ -415,7 +415,8 @@ def _audience_markdown(report: AuditReport) -> list[str]:
         "",
         "## Audience sample",
         "",
-        f"The newest {size:,} of {profile.follower_count:,} followers.",
+        f"A sample of {size:,} of {profile.follower_count:,} followers, as "
+        "Instagram lists them.",
     ]
     if audience.capped:
         lines += ["", f"> {cap_note(profile=profile, listed=size)}"]

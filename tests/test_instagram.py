@@ -300,11 +300,15 @@ async def test_walk_stops_on_a_cut_list() -> None:
     assert (walk.passes, walk.complete) == (1, False)
 
 
-async def test_walk_stops_when_the_target_is_found() -> None:
+async def test_walk_stops_mid_pass_when_the_target_is_found() -> None:
     api = FakeAPI()
-    api.route("/users/9/followers", _pass("a", "host"), _pass("b"))
+    page = list_page(
+        [compact_user("a"), compact_user("host")], next_cursor="c1"
+    )
+    api.route("/users/9/followers", page)
     walk = await _walk(api, expected=50, stop_when=lambda pks: "host" in pks)
     assert walk.passes == 1
+    assert len(api.requests) == 1
 
 
 async def test_walk_respects_max_passes() -> None:

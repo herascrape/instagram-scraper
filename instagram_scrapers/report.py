@@ -38,7 +38,7 @@ def cap_note(*, profile: Profile, listed: int) -> str:
     """Why fewer followers were listed than the profile counts."""
     if profile.is_business or profile.is_verified or profile.account_type == 2:
         return (
-            f"Instagram lists only the newest {listed} followers of this "
+            f"Instagram lists only {listed} followers of this "
             "account (it does this for business and verified accounts), so "
             "the results cover those."
         )

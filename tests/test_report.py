@@ -21,7 +21,7 @@ def test_cap_note_business() -> None:
     brand = Profile.from_api(
         full_profile("1", "brand", followers=268_000_000, account_type=2)
     )
-    assert "newest 45 followers" in cap_note(profile=brand, listed=45)
+    assert "only 45 followers" in cap_note(profile=brand, listed=45)
     assert "business and verified" in cap_note(profile=brand, listed=45)
 
 

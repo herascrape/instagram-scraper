@@ -2,7 +2,7 @@
 
 import math
 import re
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Literal, cast
 from urllib.parse import urlsplit
@@ -268,6 +268,7 @@ async def _list_pass(
     edge: Edge,
     user_pk: str,
     limit: int | None,
+    stop_when: Callable[[set[str]], bool] | None = None,
     on_progress: OnProgress | None = None,
 ) -> list[Account]:
     """One walk over a follower or following list, deduplicated by pk.
@@ -294,7 +295,8 @@ async def _list_pass(
             on_progress(len(seen))
         next_cursor = page.get("next_cursor")
         if (
-            not page.get("has_more")
+            (stop_when and stop_when(set(seen)))
+            or not page.get("has_more")
             or not isinstance(next_cursor, str)
             or not added
         ):
@@ -339,11 +341,15 @@ async def walk_until_complete(
     """
     union: dict[str, Account] = {}
     passes = 0
+
+    def found(pks: set[str]) -> bool:
+        return stop_when is not None and stop_when(pks | set(union))
+
     while passes < max_passes:
         passes += 1
         before = len(union)
         for account in await _list_pass(
-            client, edge=edge, user_pk=user_pk, limit=None
+            client, edge=edge, user_pk=user_pk, limit=None, stop_when=found
         ):
             union.setdefault(account.pk, account)
         if on_progress:
@@ -361,14 +367,6 @@ async def walk_until_complete(
         passes=passes,
         complete=len(union) >= COMPLETE_SHARE * expected,
     )
-
-
-async def fetch_following(
-    client: AsyncClient, *, user_pk: str
-) -> AsyncGenerator[Account, None]:
-    """Accounts `user_pk` follows, newest first, lazily."""
-    async for item in client.iter_user_following(user_pk):
-        yield Account.from_api(item)
 
 
 async def fetch_posts(

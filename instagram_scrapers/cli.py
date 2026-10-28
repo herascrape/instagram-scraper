@@ -289,14 +289,14 @@ def fake_followers(
             "-n",
             min=1,
             max=1000,
-            help="How many of the newest followers to check.",
+            help="How many followers to check.",
         ),
     ] = 100,
     api_key: ApiKey = None,
     output: Outputs = None,
     as_json: AsJson = False,
 ) -> None:
-    """Estimate fake and ghost followers from the newest followers.
+    """Estimate fake and ghost followers from a sample of followers.
 
     One profile call per sampled follower: --sample 100 costs about 105
     calls ($0.04).
@@ -383,8 +383,9 @@ def giveaway(
         int,
         typer.Option(
             min=25,
-            help="Most recent follows searched per drawn account for "
-            "--must-follow (25 per call).",
+            help="For --must-follow, skip drawn accounts that follow more "
+            "accounts than this (checking costs 1 call per 25, read up to 5 "
+            "times).",
         ),
     ] = 2000,
     seed: Annotated[
@@ -458,7 +459,7 @@ def audit(
     ] = 24,
     audience_sample: Annotated[
         int,
-        typer.Option(min=1, max=1000, help="Newest followers to sample."),
+        typer.Option(min=1, max=1000, help="Followers to sample."),
     ] = 50,
     deep_audience: Annotated[
         bool,

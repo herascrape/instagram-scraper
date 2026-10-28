@@ -4,7 +4,6 @@ import hashlib
 import secrets
 from collections import Counter
 from collections.abc import Sequence
-from contextlib import aclosing
 from datetime import datetime, timezone
 
 from herascrape import AsyncClient, NotFoundError, PrivateAccountError
@@ -21,9 +20,9 @@ from .instagram import (
     estimate_calls,
     extract_mentions,
     fetch_comments,
-    fetch_following,
     get_profile,
     get_profile_by_pk,
+    walk_until_complete,
 )
 from .report import footer, md_table, plural
 
@@ -321,19 +320,30 @@ async def _check(
         return None
     if profile.is_private:
         return "private, can't verify follows"
-    missing = dict(targets)
-    scanned = 0
-    async with aclosing(fetch_following(client, user_pk=profile.pk)) as follows:
-        async for account in follows:
-            scanned += 1
-            missing = {n: pk for n, pk in missing.items() if pk != account.pk}
-            if not missing:
-                return None
-            if scanned >= rules.max_following_to_scan:
-                break
-    names = ", ".join(f"@{n}" for n in missing)
-    if scanned >= rules.max_following_to_scan:
-        return f"{names} not in their {scanned:,} most recent follows"
+    limit = rules.max_following_to_scan
+    if profile.following_count > limit:
+        return (
+            f"follows {profile.following_count:,} accounts, more than the "
+            f"{limit:,} checked"
+        )
+    wanted = set(targets.values())
+    walk = await walk_until_complete(
+        client,
+        edge="following",
+        user_pk=profile.pk,
+        expected=profile.following_count,
+        stop_when=lambda pks: wanted <= pks,
+    )
+    seen = {account.pk for account in walk.accounts}
+    missing = [name for name, pk in targets.items() if pk not in seen]
+    if not missing:
+        return None
+    names = ", ".join(f"@{name}" for name in missing)
+    if not walk.complete:
+        return (
+            f"{names} not among the {len(seen):,} of "
+            f"{profile.following_count:,} follows Instagram listed"
+        )
     return f"doesn't follow {names}"
 
 

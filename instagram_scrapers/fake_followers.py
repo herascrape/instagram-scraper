@@ -1,4 +1,4 @@
-"""Fake and ghost follower check over a sample of the newest followers."""
+"""Fake and ghost follower check over a sample of followers."""
 
 import asyncio
 from collections import Counter
@@ -93,7 +93,7 @@ async def check_fake_followers(
     concurrency: int = 8,
     on_progress: OnProgress | None = None,
 ) -> FakeFollowerReport:
-    """Score the newest `sample` followers of `target`."""
+    """Score the first `sample` followers Instagram lists for `target`."""
     listed = await fetch_followers(client, profile=target, limit=sample)
     gate = asyncio.Semaphore(concurrency)
     done = 0
@@ -138,8 +138,8 @@ def _markdown(report: FakeFollowerReport) -> str:
     lines = [
         f"# Fake follower check: @{target.username}",
         "",
-        f"Sample: the newest {checked:,} of {target.follower_count:,} "
-        f"followers, checked {report.checked_at:%Y-%m-%d}.",
+        f"Sample: {checked:,} of {target.follower_count:,} followers, as "
+        f"Instagram lists them, checked {report.checked_at:%Y-%m-%d}.",
         "",
     ]
     if report.capped:
@@ -192,8 +192,8 @@ def _markdown(report: FakeFollowerReport) -> str:
     lines += [
         "",
         "This is an estimate from a sample, not a verdict on any account. "
-        "Instagram lists followers newest first, so a recent wave of bot "
-        "follows weighs more here than in the whole audience.",
+        "The sample is the first accounts Instagram returns, not a random "
+        "draw from the whole audience.",
     ]
     if report.unavailable:
         lines += [

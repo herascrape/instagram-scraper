@@ -224,7 +224,7 @@ async def test_expensive_checks_only_on_candidates() -> None:
     assert len(profile_calls) == 2
 
 
-async def test_must_follow_private_window_and_found() -> None:
+async def test_must_follow_private_large_and_found() -> None:
     comments = _fans(10)
     order = _ranked("seed", _pks(comments))
     user_of = {str(c["pk"]): cast(JSON, c["user"]) for c in comments}
@@ -238,17 +238,9 @@ async def test_must_follow_private_window_and_found() -> None:
         f"/users/{large['pk']}",
         full_profile(str(large["pk"]), following=5000),
     )
-    large_path = f"/users/{large['pk']}/following"
-    others = [compact_user(str(n)) for n in range(100, 125)]
-    api.route(large_path, list_page(others, next_cursor="l1"))
-    api.route(
-        large_path,
-        list_page(others, next_cursor="l2"),
-        query={"cursor": "l1"},
-    )
     api.route(
         f"/users/{follower['pk']}",
-        full_profile(str(follower["pk"]), following=5000),
+        full_profile(str(follower["pk"]), following=40),
     )
     path = f"/users/{follower['pk']}/following"
     api.route(path, list_page([compact_user("50")], next_cursor="f1"))
@@ -267,10 +259,27 @@ async def test_must_follow_private_window_and_found() -> None:
     assert [c.ticket.user.pk for c in result.winners] == [follower["pk"]]
     assert [c.reason for c in result.rejected] == [
         "private, can't verify follows",
-        "@bakery not in their 50 most recent follows",
+        "follows 5,000 accounts, more than the 50 checked",
     ]
-    assert api.paths(large_path) == [large_path, large_path]
+    assert api.paths(f"/users/{large['pk']}/following") == []
     assert api.paths(path) == [path, path]
+
+
+async def test_must_follow_found_on_a_later_pass() -> None:
+    comments = _fans(1)
+    user = cast(JSON, comments[0]["user"])
+    api = _api(comments)
+    api.route(
+        f"/users/{user['pk']}", full_profile(str(user["pk"]), following=3)
+    )
+    api.route(
+        f"/users/{user['pk']}/following",
+        list_page([compact_user("50"), compact_user("51")], next_cursor=None),
+        list_page([compact_user("51"), compact_user("9")], next_cursor=None),
+    )
+    rules = GiveawayRules(winners=1, backups=0, must_follow=["bakery"])
+    result = await _draw(api, rules)
+    assert [c.ticket.user.pk for c in result.winners] == [user["pk"]]
 
 
 async def test_must_follow_missing() -> None:
@@ -282,7 +291,10 @@ async def test_must_follow_missing() -> None:
     )
     api.route(
         f"/users/{user['pk']}/following",
-        list_page([compact_user("50")], next_cursor=None),
+        list_page(
+            [compact_user("50"), compact_user("51"), compact_user("52")],
+            next_cursor=None,
+        ),
     )
     rules = GiveawayRules(winners=1, backups=0, must_follow=["bakery"])
     result = await _draw(api, rules)

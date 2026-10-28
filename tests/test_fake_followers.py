@@ -34,6 +34,9 @@ async def test_check_counts_and_reasons() -> None:
                 posts=0,
                 full_name="",
             ),
+            full_profile(
+                "5", "f4f.crafts2014", followers=209, following=3245, posts=59
+            ),
         ]
     )
     api.route(
@@ -43,6 +46,7 @@ async def test_check_counts_and_reasons() -> None:
                 compact_user("1", "real.person"),
                 compact_user("2", "quiet_one"),
                 compact_user("3", "user84629173"),
+                compact_user("5", "f4f.crafts2014"),
                 compact_user("4", "deleted.since"),
             ],
             next_cursor=None,
@@ -53,16 +57,16 @@ async def test_check_counts_and_reasons() -> None:
         report = await check_fake_followers(
             client, target=Profile.from_api(TARGET), sample=100
         )
-    assert report.counts == {"real": 1, "ghost": 1, "fake": 1}
+    assert report.counts == {"real": 2, "ghost": 1, "fake": 1}
     assert report.unavailable == 1
     assert report.signal_counts["no_posts"] == 2
-    assert report.signal_counts["follow_ratio"] == 1
+    assert report.signal_counts["follow_ratio"] == 2
     by_name = {f.account.username: f for f in report.followers}
     assert by_name["user84629173"].category == "fake"
     assert "generated_username" in by_name["user84629173"].reasons
     assert by_name["quiet_one"].category == "ghost"
     assert report.capped is False
-    assert counter.calls == 4
+    assert counter.calls == 5
 
 
 async def test_check_capped_sample() -> None:
@@ -76,7 +80,8 @@ async def test_check_capped_sample() -> None:
         )
     assert report.capped is True
     assert len(report.followers) == 45
-    assert "newest 45" in report.markdown()
+    assert "only 45 followers" in report.markdown()
+    assert "newest" not in report.markdown()
 
 
 async def test_csv_rows_shape() -> None:
