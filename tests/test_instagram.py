@@ -127,6 +127,42 @@ async def test_fetch_followers_stops_at_limit() -> None:
     assert counter.calls == 1
 
 
+async def test_fetch_followers_dedupes_overlapping_pages() -> None:
+    api = FakeAPI()
+    first = [compact_user(str(n)) for n in range(25)]
+    second = [compact_user(str(n)) for n in range(20, 45)]
+    api.route("/users/9/followers", list_page(first, next_cursor="c1"))
+    api.route(
+        "/users/9/followers",
+        list_page(second, next_cursor="c2"),
+        query={"cursor": "c1"},
+    )
+    client, counter = open_client(api_key="hs_test", inner=api.transport())
+    async with client:
+        result = await fetch_followers(client, profile=_profile(5000), limit=40)
+    assert [a.pk for a in result.accounts] == [str(n) for n in range(40)]
+    assert counter.calls == 2
+
+
+async def test_fetch_followers_stops_on_a_page_with_nothing_new() -> None:
+    api = FakeAPI()
+    first = [compact_user(str(n)) for n in range(25)]
+    api.route("/users/9/followers", list_page(first, next_cursor="c1"))
+    api.route(
+        "/users/9/followers",
+        list_page(first, next_cursor="c2"),
+        query={"cursor": "c1"},
+    )
+    client, counter = open_client(api_key="hs_test", inner=api.transport())
+    async with client:
+        result = await fetch_followers(
+            client, profile=_profile(5000), limit=None
+        )
+    assert len(result.accounts) == 25
+    assert result.capped is True
+    assert counter.calls == 2
+
+
 async def test_fetch_posts_joins_halves_skips_pins() -> None:
     api = FakeAPI()
     pinned = post_detail("1", taken_at=1_600_000_000)

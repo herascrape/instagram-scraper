@@ -197,8 +197,24 @@ def _kind(data: JSON) -> PostKind:
     return "video" if media_type == 2 else "photo"
 
 
+class PrivateProfileError(Exception):
+    """The target is private, and this tool never logs in."""
+
+    def __init__(self, username: str) -> None:
+        super().__init__(f"@{username} is private")
+        self.username = username
+
+
 async def get_profile(client: AsyncClient, *, username: str) -> Profile:
     return Profile.from_api(await client.user_by_username(username))
+
+
+async def get_public_profile(client: AsyncClient, *, username: str) -> Profile:
+    """The profile, or `PrivateProfileError` before any list is paged."""
+    profile = await get_profile(client, username=username)
+    if profile.is_private:
+        raise PrivateProfileError(profile.username)
+    return profile
 
 
 async def get_profile_by_pk(client: AsyncClient, *, pk: str) -> Profile:
@@ -229,17 +245,33 @@ async def fetch_followers(
     limit: int | None,
     on_progress: OnProgress | None = None,
 ) -> FollowerList:
-    """The first `limit` followers (all if None), newest first."""
-    accounts: list[Account] = []
-    async for item in client.iter_user_followers(profile.pk, max_items=limit):
-        accounts.append(Account.from_api(item))
+    """The first `limit` unique followers (all if None), newest first.
+
+    Pages can overlap, so accounts are deduplicated by pk, and a page that
+    adds nothing new ends the walk.
+    """
+    seen: dict[str, Account] = {}
+    cursor: str | None = None
+    while True:
+        page: JSON = await client.user_followers(profile.pk, cursor=cursor)
+        added = 0
+        for item in cast("list[JSON]", page.get("items") or []):
+            account = Account.from_api(item)
+            if account.pk not in seen:
+                seen[account.pk] = account
+                added += 1
+            if limit is not None and len(seen) >= limit:
+                return FollowerList(accounts=list(seen.values()), capped=False)
         if on_progress:
-            on_progress(len(accounts))
-    short_of_limit = limit is None or len(accounts) < limit
-    capped = short_of_limit and len(accounts) < (
-        COMPLETE_SHARE * profile.follower_count
-    )
-    return FollowerList(accounts=accounts, capped=capped)
+            on_progress(len(seen))
+        next_cursor = page.get("next_cursor")
+        if not page.get("has_more") or not isinstance(next_cursor, str):
+            break
+        if not added:
+            break
+        cursor = next_cursor
+    capped = len(seen) < COMPLETE_SHARE * profile.follower_count
+    return FollowerList(accounts=list(seen.values()), capped=capped)
 
 
 async def fetch_following(
