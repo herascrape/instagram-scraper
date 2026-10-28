@@ -2,7 +2,9 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 
 import pytest
+from herascrape import NotFoundError
 
+from instagram_scrapers import instagram
 from instagram_scrapers.client import open_client
 from instagram_scrapers.instagram import (
     JSON,
@@ -322,3 +324,71 @@ async def test_walk_respects_max_passes() -> None:
     )
     walk = await _walk(api, expected=100, max_passes=3)
     assert (walk.passes, len(walk.accounts)) == (3, 62)
+
+
+NOT_FOUND: JSON = {
+    "status": "client_error",
+    "error_code": "not_found",
+    "detail": "Wacht een paar minuten voordat je het opnieuw probeert.",
+}
+
+
+@pytest.fixture
+def no_retry_delay(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(instagram, "RETRY_DELAY", 0.0)
+
+
+async def test_list_pass_retries_a_transient_not_found(
+    no_retry_delay: None,
+) -> None:
+    api = FakeAPI()
+    first = [compact_user(str(n)) for n in range(25)]
+    second = [compact_user(str(n)) for n in range(25, 40)]
+    api.route("/users/9/followers", list_page(first, next_cursor="c1"))
+    api.respond(
+        "/users/9/followers",
+        (404, NOT_FOUND),
+        (200, list_page(second, next_cursor=None)),
+        query={"cursor": "c1"},
+    )
+    client, counter = open_client(api_key="hs_test", inner=api.transport())
+    async with client:
+        result = await fetch_followers(client, profile=_profile(40), limit=None)
+    assert len(result.accounts) == 40
+    assert counter.calls == 2
+
+
+async def test_list_pass_gives_up_on_a_persistent_not_found(
+    no_retry_delay: None,
+) -> None:
+    api = FakeAPI()
+    api.error("/users/9/followers", status=404, error_code="not_found")
+    client, _ = open_client(api_key="hs_test", inner=api.transport())
+    async with client:
+        with pytest.raises(NotFoundError):
+            await fetch_followers(client, profile=_profile(40), limit=None)
+    assert len(api.requests) == instagram.PAGE_ATTEMPTS
+
+
+async def test_comments_retry_a_transient_not_found(
+    no_retry_delay: None,
+) -> None:
+    api = FakeAPI()
+    owner = compact_user("9", "host")
+    api.route("/posts/ABCDEF", post_body("77", code="ABCDEF", owner=owner))
+    fan = compact_user("5", "fan")
+    api.respond(
+        "/posts/77/comments",
+        (404, NOT_FOUND),
+        (
+            200,
+            comments_page(
+                [comment("1", user=fan, text="hi")], next_min_id=None
+            ),
+        ),
+    )
+    client, _ = open_client(api_key="hs_test", inner=api.transport())
+    async with client:
+        post = await get_post(client, ref="ABCDEF")
+        comments = await fetch_comments(client, post=post)
+    assert [c.pk for c in comments] == ["1"]

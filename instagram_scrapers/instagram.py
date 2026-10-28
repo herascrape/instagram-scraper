@@ -1,13 +1,15 @@
 """Typed views over the Instagram payloads herascrape returns."""
 
+import asyncio
 import math
 import re
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
+from functools import partial
 from typing import Literal, cast
 from urllib.parse import urlsplit
 
-from herascrape import AsyncClient
+from herascrape import AsyncClient, NotFoundError, ProfileNotFoundError
 from pydantic import BaseModel, ConfigDict, model_validator
 
 JSON = dict[str, object]
@@ -25,6 +27,10 @@ COMPLETE_SHARE = 0.98
 # reshuffled; repeating it adds nothing.
 CUT_SHARE = 0.5
 MAX_PASSES = 5
+# A throttled pooled account answers some pages with a 404 ("wait a few
+# minutes"); the next attempt is served by another account.
+PAGE_ATTEMPTS = 3
+RETRY_DELAY = 0.5
 
 _USERNAME = re.compile(r"^[a-z0-9._]{1,30}$")
 _SHORTCODE = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
@@ -229,6 +235,20 @@ class PrivateProfileError(Exception):
         self.username = username
 
 
+async def _page(fetch: Callable[[], Awaitable[JSON]]) -> JSON:
+    """One page of a walk, retrying a transient 404."""
+    attempt = 1
+    while True:
+        try:
+            return await fetch()
+        except NotFoundError as exc:
+            gone = isinstance(exc, ProfileNotFoundError)
+            if gone or attempt >= PAGE_ATTEMPTS:
+                raise
+        await asyncio.sleep(RETRY_DELAY * attempt)
+        attempt += 1
+
+
 async def get_profile(client: AsyncClient, *, username: str) -> Profile:
     return Profile.from_api(await client.user_by_username(username))
 
@@ -282,7 +302,7 @@ async def _list_pass(
     seen: dict[str, Account] = {}
     cursor: str | None = None
     while True:
-        page: JSON = await fetch(user_pk, cursor=cursor)
+        page = await _page(partial(fetch, user_pk, cursor=cursor))
         added = 0
         for item in cast("list[JSON]", page.get("items") or []):
             account = Account.from_api(item)
@@ -376,7 +396,7 @@ async def fetch_posts(
     posts: list[Post] = []
     cursor: str | None = None
     while len(posts) < limit:
-        page: JSON = await client.user_posts(user_pk, cursor=cursor)
+        page = await _page(partial(client.user_posts, user_pk, cursor=cursor))
         feed = cast(JSON, page.get("feed") or {})
         details = cast("dict[str, JSON]", page.get("posts") or {})
         grid = cast("list[JSON]", feed.get("profile_grid_items") or [])
@@ -428,7 +448,9 @@ async def fetch_comments(
     seen: dict[str, Comment] = {}
     min_id: str | None = None
     while True:
-        page: JSON = await client.post_comments(post.pk, min_id=min_id)
+        page = await _page(
+            partial(client.post_comments, post.pk, min_id=min_id)
+        )
         for item in cast("list[JSON]", page.get("comments") or []):
             parsed = _comment(item)
             seen.setdefault(parsed.pk, parsed)

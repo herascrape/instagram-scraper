@@ -15,7 +15,7 @@ class FakeAPI:
     """
 
     def __init__(self) -> None:
-        self._routes: dict[_Key, tuple[int, list[JSON]]] = {}
+        self._routes: dict[_Key, list[tuple[int, JSON]]] = {}
         self.requests: list[httpx.Request] = []
 
     def route(
@@ -25,8 +25,17 @@ class FakeAPI:
         query: dict[str, str] | None = None,
         status: int = 200,
     ) -> None:
+        self.respond(path, *((status, body) for body in bodies), query=query)
+
+    def respond(
+        self,
+        path: str,
+        *replies: tuple[int, JSON],
+        query: dict[str, str] | None = None,
+    ) -> None:
+        """Serve `(status, body)` replies in turn, then repeat the last."""
         key = (path, frozenset((query or {}).items()))
-        self._routes[key] = (status, list(bodies))
+        self._routes[key] = list(replies)
 
     def error(
         self,
@@ -55,8 +64,8 @@ class FakeAPI:
                     "detail": f"unrouted {request.url}",
                 },
             )
-        status, bodies = self._routes[key]
-        body = bodies.pop(0) if len(bodies) > 1 else bodies[0]
+        replies = self._routes[key]
+        status, body = replies.pop(0) if len(replies) > 1 else replies[0]
         return httpx.Response(status, json=body)
 
     def transport(self) -> httpx.MockTransport:
