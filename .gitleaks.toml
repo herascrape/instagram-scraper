@@ -1,0 +1,4 @@
+title = "instagram-scraper gitleaks config"
+
+[extend]
+useDefault = true

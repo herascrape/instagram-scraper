@@ -1,0 +1,86 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "instagram-scrapers"
+dynamic = ["version"]
+description = "Instagram scraper CLI: fake follower checker, giveaway comment picker, account audit and follower tracker. No login, no ban."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "herascrape" }]
+keywords = [
+    "instagram scraper",
+    "instagram fake follower checker",
+    "instagram giveaway picker",
+    "instagram comment picker",
+    "instagram audit",
+    "instagram engagement rate",
+    "instagram unfollowers",
+    "instagram private api",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: WWW/HTTP",
+    "Typing :: Typed",
+]
+dependencies = [
+    "herascrape>=0.1.5",
+    "typer>=0.15",
+    "rich>=13",
+    "pydantic>=2.7",
+    "platformdirs>=4",
+    "tzdata; sys_platform == 'win32'",
+]
+
+[project.scripts]
+instagram-scraper = "instagram_scrapers.cli:main"
+
+[project.urls]
+Homepage = "https://herascrape.com"
+Repository = "https://github.com/herascrape/instagram-scraper"
+Issues = "https://github.com/herascrape/instagram-scraper/issues"
+"API client" = "https://github.com/herascrape/herascrape"
+
+# Dev tooling lives in a PEP 735 group so `uv run`/`uv sync` install it by default.
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "ruff==0.15.10",
+    "pyright==1.1.414",
+]
+
+[tool.uv]
+package = true
+
+[tool.hatch.version]
+path = "instagram_scrapers/__init__.py"
+
+[tool.hatch.build.targets.sdist]
+include = ["/instagram_scrapers"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["instagram_scrapers"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "live: hits the real api.herascrape.com (needs HERASCRAPE_API_KEY)",
+]
+
+[tool.pyright]
+include = ["instagram_scrapers", "tests"]
+pythonVersion = "3.10"
+typeCheckingMode = "strict"

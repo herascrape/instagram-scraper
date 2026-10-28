@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.pyright/
+.coverage
+htmlcov/
+
+# Secrets and local environment
+.env
+.env.*
+
+# Local data written by the CLI
+*.sqlite3
+
+# Local tooling
+.superpowers/
+.vscode/
+.idea/
+.DS_Store
