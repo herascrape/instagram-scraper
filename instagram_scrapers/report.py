@@ -48,5 +48,9 @@ def cap_note(*, profile: Profile, listed: int) -> str:
     )
 
 
+def plural(count: int, word: str, many: str | None = None) -> str:
+    return f"{count:,} {word if count == 1 else many or word + 's'}"
+
+
 def footer() -> str:
     return f"Generated with [instagram-scraper]({REPO_URL})."

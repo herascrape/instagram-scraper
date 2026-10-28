@@ -1,5 +1,5 @@
 from instagram_scrapers.instagram import Profile
-from instagram_scrapers.report import cap_note, md_table, percent
+from instagram_scrapers.report import cap_note, md_table, percent, plural
 from tests.factories import full_profile
 
 
@@ -30,3 +30,9 @@ def test_cap_note_personal() -> None:
     note = cap_note(profile=person, listed=110)
     assert "110 of 116" in note
     assert "business" not in note
+
+
+def test_plural() -> None:
+    assert plural(1, "winner") == "1 winner"
+    assert plural(2, "entry", "entries") == "2 entries"
+    assert plural(1_000, "account") == "1,000 accounts"

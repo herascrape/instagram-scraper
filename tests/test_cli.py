@@ -8,7 +8,14 @@ from typer.testing import CliRunner
 from instagram_scrapers import __version__, cli
 from instagram_scrapers.cli import app
 from instagram_scrapers.client import CountingTransport, open_client
-from tests.factories import compact_user, full_profile, list_page
+from tests.factories import (
+    comment,
+    comments_page,
+    compact_user,
+    full_profile,
+    list_page,
+    post_body,
+)
 from tests.fakeapi import FakeAPI
 
 runner = CliRunner()
@@ -105,3 +112,54 @@ def test_fake_followers_json_flag(api: FakeAPI) -> None:
     assert body["counts"] == {"real": 1, "ghost": 0, "fake": 0}
     assert body["usage"]["calls"] == 3
     assert "3 API calls" in result.stderr
+
+
+def _giveaway_api(api: FakeAPI, *, comment_count: int = 3) -> None:
+    owner = compact_user("9", "bakery")
+    api.route(
+        "/posts/DQSPu0hE_pP",
+        post_body(
+            "77", code="DQSPu0hE_pP", owner=owner, comment_count=comment_count
+        ),
+    )
+    fans = [
+        comment(str(n), user=compact_user(str(n), f"fan{n}"), text="@a me")
+        for n in range(1, 4)
+    ]
+    api.route("/posts/77/comments", comments_page(fans, next_min_id=None))
+
+
+def test_giveaway_json(api: FakeAPI) -> None:
+    _giveaway_api(api)
+    args = [
+        "giveaway",
+        "https://www.instagram.com/p/DQSPu0hE_pP/?igsh=x",
+        "--seed",
+        "s",
+        "--min-mentions",
+        "1",
+        "--until",
+        "2030-01-01T00:00Z",
+        "--json",
+    ]
+    result = runner.invoke(app, args)
+    assert result.exit_code == 0, result.output
+    body = json.loads(result.stdout)
+    assert body["seed"] == "s"
+    assert len(body["winners"]) == 1
+    assert body["rules"]["until"] == "2030-01-01T00:00:00Z"
+
+
+def test_giveaway_bad_until(api: FakeAPI) -> None:
+    result = runner.invoke(app, ["giveaway", "ABCDEF", "--until", "soon"])
+    assert result.exit_code == 2
+    assert api.requests == []
+
+
+def test_budget_guard_non_interactive(api: FakeAPI) -> None:
+    _giveaway_api(api, comment_count=60_000)
+    result = runner.invoke(app, ["giveaway", "DQSPu0hE_pP"])
+    assert result.exit_code == 2
+    assert "4,001 API calls" in result.stderr
+    assert "--yes" in result.stderr
+    assert api.paths("/posts/77/comments") == []

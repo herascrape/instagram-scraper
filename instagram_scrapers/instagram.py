@@ -2,7 +2,7 @@
 
 import math
 import re
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, Callable
 from datetime import datetime, timezone
 from typing import Literal, cast
 from urllib.parse import urlsplit
@@ -24,6 +24,7 @@ COMPLETE_SHARE = 0.98
 _USERNAME = re.compile(r"^[a-z0-9._]{1,30}$")
 _SHORTCODE = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
 _MEDIA_PK = re.compile(r"^\d+(?:_\d+)?$")
+_MENTION = re.compile(r"(?<![\w.@])@([A-Za-z0-9._]{1,30})")
 _POST_SEGMENTS = {"p", "reel", "reels", "tv"}
 _RESERVED = _POST_SEGMENTS | {"stories", "explore", "accounts", "direct"}
 
@@ -159,6 +160,16 @@ def _url_segments(text: str) -> list[str]:
     return [part for part in urlsplit(url).path.split("/") if part]
 
 
+def extract_mentions(text: str) -> list[str]:
+    """Distinct lowercase @handles in order of first appearance."""
+    found: dict[str, None] = {}
+    for match in _MENTION.finditer(text):
+        handle = match.group(1).rstrip(".").lower()
+        if handle:
+            found.setdefault(handle)
+    return list(found)
+
+
 def estimate_calls(*, items: int, page_size: int) -> int:
     """Pages needed to list `items`; an empty list still costs one call."""
     return max(1, math.ceil(items / page_size))
@@ -276,8 +287,8 @@ async def fetch_followers(
 
 async def fetch_following(
     client: AsyncClient, *, user_pk: str
-) -> AsyncIterator[Account]:
-    """Accounts `user_pk` follows, lazily, so a scan can stop early."""
+) -> AsyncGenerator[Account, None]:
+    """Accounts `user_pk` follows, newest first, lazily."""
     async for item in client.iter_user_following(user_pk):
         yield Account.from_api(item)
 

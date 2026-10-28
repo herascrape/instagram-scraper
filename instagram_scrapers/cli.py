@@ -1,6 +1,7 @@
 import asyncio
 import sys
 from collections.abc import Awaitable, Callable
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, NoReturn, Protocol, TypeVar
 
@@ -29,7 +30,19 @@ from . import __version__
 from .client import PRICE_PER_CALL, Usage, open_client
 from .export import Exportable, check_outputs, write_outputs
 from .fake_followers import FakeFollowerReport, check_fake_followers
-from .instagram import PrivateProfileError, get_public_profile, parse_username
+from .giveaway import (
+    GiveawayResult,
+    GiveawayRules,
+    estimate_giveaway_calls,
+    run_giveaway,
+)
+from .instagram import (
+    PrivateProfileError,
+    get_post,
+    get_public_profile,
+    parse_post_ref,
+    parse_username,
+)
 
 BUDGET_CONFIRM_CALLS = 1250
 
@@ -128,6 +141,26 @@ def _username(value: str) -> str:
         return parse_username(value)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
+
+
+def _post_ref(value: str) -> str:
+    try:
+        return parse_post_ref(value)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+def _moment(value: str | None) -> datetime | None:
+    """ISO 8601 time; UTC unless it carries an offset."""
+    if value is None:
+        return None
+    try:
+        moment = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise typer.BadParameter(
+            f"{value!r} is not an ISO time like 2026-11-01T18:00"
+        ) from exc
+    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
 
 
 async def _execute(job: Job[R], *, client: AsyncClient, label: str) -> R:
@@ -272,6 +305,130 @@ def fake_followers(
         job,
         target=f"@{name}",
         label="Checking followers",
+        api_key=api_key,
+        outputs=output,
+        as_json=as_json,
+    )
+
+
+@app.command()
+def giveaway(
+    post: Annotated[
+        str,
+        typer.Argument(
+            help="Post or reel URL, shortcode or media id.",
+            show_default=False,
+        ),
+    ],
+    winners: Annotated[
+        int, typer.Option("--winners", "-w", min=1, help="Winners to draw.")
+    ] = 1,
+    backups: Annotated[
+        int, typer.Option(min=0, help="Alternates drawn after the winners.")
+    ] = 2,
+    min_mentions: Annotated[
+        int,
+        typer.Option(min=0, help="Other accounts a comment must @tag."),
+    ] = 0,
+    keyword: Annotated[
+        list[str] | None,
+        typer.Option(
+            help="Text a comment must contain. Repeat to require several.",
+            show_default=False,
+        ),
+    ] = None,
+    until: Annotated[
+        str | None,
+        typer.Option(
+            help="Close time (ISO 8601, UTC unless an offset is given). "
+            "Later comments don't count.",
+            show_default=False,
+        ),
+    ] = None,
+    max_entries_per_user: Annotated[
+        int, typer.Option(min=1, help="Comments that count per account.")
+    ] = 1,
+    exclude: Annotated[
+        list[str] | None,
+        typer.Option(
+            help="Account that can't win. Repeatable.", show_default=False
+        ),
+    ] = None,
+    min_followers: Annotated[
+        int,
+        typer.Option(min=0, help="Winner needs this many followers."),
+    ] = 0,
+    min_posts: Annotated[
+        int, typer.Option(min=0, help="Winner needs this many posts.")
+    ] = 0,
+    require_avatar: Annotated[
+        bool, typer.Option(help="Winner needs a profile picture.")
+    ] = False,
+    must_follow: Annotated[
+        list[str] | None,
+        typer.Option(
+            help="Account the winner must follow, e.g. the host. Repeatable.",
+            show_default=False,
+        ),
+    ] = None,
+    follow_scan_limit: Annotated[
+        int,
+        typer.Option(
+            min=25,
+            help="Most recent follows searched per drawn account for "
+            "--must-follow (25 per call).",
+        ),
+    ] = 2000,
+    seed: Annotated[
+        str | None,
+        typer.Option(
+            help="Draw seed. Publish it to let anyone re-run the draw; "
+            "random if omitted.",
+            show_default=False,
+        ),
+    ] = None,
+    yes: Yes = False,
+    api_key: ApiKey = None,
+    output: Outputs = None,
+    as_json: AsJson = False,
+) -> None:
+    """Pick giveaway winners from a post's comments, provably fairly.
+
+    Fetching comments costs one call per 15 (1,000 comments: about 68 calls,
+    $0.03). Winner checks (--min-followers, --must-follow, ...) run only on
+    drawn accounts.
+    """
+    ref = _post_ref(post)
+    rules = GiveawayRules(
+        winners=winners,
+        backups=backups,
+        min_mentions=min_mentions,
+        keywords=keyword or [],
+        until=_moment(until),
+        max_entries_per_user=max_entries_per_user,
+        exclude=[_username(name) for name in exclude or []],
+        min_followers=min_followers,
+        min_posts=min_posts,
+        require_avatar=require_avatar,
+        must_follow=[_username(name) for name in must_follow or []],
+        max_following_to_scan=follow_scan_limit,
+    )
+
+    async def job(client: AsyncClient, session: Session) -> GiveawayResult:
+        info = await get_post(client, ref=ref)
+        session.confirm_budget(estimate=estimate_giveaway_calls(info), yes=yes)
+        return await run_giveaway(
+            client,
+            post=info,
+            rules=rules,
+            seed=seed,
+            on_progress=session.advance,
+        )
+
+    _run(
+        job,
+        target=ref,
+        label="Fetching comments",
         api_key=api_key,
         outputs=output,
         as_json=as_json,
