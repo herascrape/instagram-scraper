@@ -78,9 +78,12 @@ Measured through the herascrape API:
 
 - Followers and following come 25 per page, posts 9, comments 15.
 - Follower and following lists are reordered between requests. One pass sees
-  roughly 80% of a list; `walk_until_complete` repeats passes until the list
+  70 to 90% of a list; `walk_until_complete` repeats passes until the list
   stops growing.
-- Business and verified accounts list only about 50 followers.
+- About 1 in 15 list pages comes back as a 404 that succeeds on retry (a
+  throttled account on the API side); `_page` in `instagram.py` retries it.
+- Some business and verified accounts list only about 50 followers (natgeo:
+  45 to 49 of 268 million).
 - The profile grid includes pinned posts; `fetch_posts` drops them.
 - Some posts hide like counts (`like_count` is null). Leave them out of ratios.
 - Comments page with `min_id` until `has_more` is false. Replies are separate.
