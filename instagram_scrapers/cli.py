@@ -31,6 +31,13 @@ from .audit import AuditReport, audit_account, check_tz
 from .client import PRICE_PER_CALL, Usage, open_client
 from .export import Exportable, check_outputs, write_outputs
 from .fake_followers import FakeFollowerReport, check_fake_followers
+from .followers import (
+    FollowerDiff,
+    SnapshotStore,
+    default_db_path,
+    estimate_follower_calls,
+    track_followers,
+)
 from .giveaway import (
     GiveawayResult,
     GiveawayRules,
@@ -493,6 +500,55 @@ def audit(
         job,
         target=f"@{name}",
         label="Auditing",
+        api_key=api_key,
+        outputs=output,
+        as_json=as_json,
+    )
+
+
+@app.command()
+def followers(
+    username: Annotated[
+        str,
+        typer.Argument(
+            help="Public account to track: name, @name or profile URL.",
+            show_default=False,
+        ),
+    ],
+    db: Annotated[
+        Path | None,
+        typer.Option(
+            help="Snapshot database (default: your user data folder).",
+            show_default=False,
+        ),
+    ] = None,
+    yes: Yes = False,
+    api_key: ApiKey = None,
+    output: Outputs = None,
+    as_json: AsJson = False,
+) -> None:
+    """Who followed and unfollowed since the last run.
+
+    Saves a snapshot of the full follower list and compares it with the
+    previous one. One call per 25 followers (10,000: 400 calls, $0.16).
+    """
+    name = _username(username)
+    path = db or default_db_path()
+
+    async def job(client: AsyncClient, session: Session) -> FollowerDiff:
+        target = await get_public_profile(client, username=name)
+        session.confirm_budget(
+            estimate=estimate_follower_calls(target), yes=yes
+        )
+        with SnapshotStore(path=path) as store:
+            return await track_followers(
+                client, profile=target, store=store, on_progress=session.advance
+            )
+
+    _run(
+        job,
+        target=f"@{name}",
+        label="Listing followers",
         api_key=api_key,
         outputs=output,
         as_json=as_json,

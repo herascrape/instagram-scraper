@@ -1,10 +1,13 @@
+from collections.abc import Callable
 from datetime import datetime, timezone
 
 import pytest
 
 from instagram_scrapers.client import open_client
 from instagram_scrapers.instagram import (
+    JSON,
     Profile,
+    Walk,
     fetch_comments,
     fetch_followers,
     fetch_posts,
@@ -12,6 +15,7 @@ from instagram_scrapers.instagram import (
     get_profile,
     parse_post_ref,
     parse_username,
+    walk_until_complete,
 )
 from tests.factories import (
     comment,
@@ -246,3 +250,71 @@ async def test_get_profile_parses_and_tolerates_missing_fields() -> None:
     assert profile.follower_count == 10
     assert profile.biography == ""
     assert profile.has_bio_links is False
+
+
+def _pass(*pks: str) -> JSON:
+    return list_page([compact_user(pk) for pk in pks], next_cursor=None)
+
+
+async def _walk(
+    api: FakeAPI,
+    *,
+    expected: int,
+    max_passes: int = 5,
+    stop_when: Callable[[set[str]], bool] | None = None,
+) -> Walk:
+    client, _ = open_client(api_key="hs_test", inner=api.transport())
+    async with client:
+        return await walk_until_complete(
+            client,
+            edge="followers",
+            user_pk="9",
+            expected=expected,
+            max_passes=max_passes,
+            stop_when=stop_when,
+        )
+
+
+async def test_walk_unions_passes_until_complete() -> None:
+    api = FakeAPI()
+    api.route("/users/9/followers", _pass("a", "b"), _pass("b", "c"))
+    walk = await _walk(api, expected=3)
+    assert sorted(a.pk for a in walk.accounts) == ["a", "b", "c"]
+    assert (walk.passes, walk.complete) == (2, True)
+    assert len(api.requests) == 2
+
+
+async def test_walk_stops_when_a_pass_adds_nothing() -> None:
+    api = FakeAPI()
+    api.route(
+        "/users/9/followers", _pass("a", "b", "c", "d", "e", "f"), _pass("a")
+    )
+    walk = await _walk(api, expected=10)
+    assert (walk.passes, walk.complete, len(walk.accounts)) == (2, False, 6)
+
+
+async def test_walk_stops_on_a_cut_list() -> None:
+    api = FakeAPI()
+    api.route("/users/9/followers", _pass(*[str(n) for n in range(48)]))
+    walk = await _walk(api, expected=1_000_000)
+    assert (walk.passes, walk.complete) == (1, False)
+
+
+async def test_walk_stops_when_the_target_is_found() -> None:
+    api = FakeAPI()
+    api.route("/users/9/followers", _pass("a", "host"), _pass("b"))
+    walk = await _walk(api, expected=50, stop_when=lambda pks: "host" in pks)
+    assert walk.passes == 1
+
+
+async def test_walk_respects_max_passes() -> None:
+    api = FakeAPI()
+    api.route(
+        "/users/9/followers",
+        _pass(*[str(n) for n in range(60)]),
+        _pass("x1"),
+        _pass("x2"),
+        _pass("x3"),
+    )
+    walk = await _walk(api, expected=100, max_passes=3)
+    assert (walk.passes, len(walk.accounts)) == (3, 62)

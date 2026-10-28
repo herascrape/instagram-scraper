@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 JSON = dict[str, object]
 OnProgress = Callable[[int], None]
 PostKind = Literal["reel", "carousel", "photo", "video"]
+Edge = Literal["followers", "following"]
 
 FOLLOWERS_PAGE_SIZE = 25
 POSTS_PAGE_SIZE = 9
@@ -20,6 +21,10 @@ COMMENTS_PAGE_SIZE = 15
 # A walk that returns at least this share of follower_count is the whole
 # list; counts drift while Instagram is paged.
 COMPLETE_SHARE = 0.98
+# A first pass below this share of the count was cut by Instagram, not
+# reshuffled; repeating it adds nothing.
+CUT_SHARE = 0.5
+MAX_PASSES = 5
 
 _USERNAME = re.compile(r"^[a-z0-9._]{1,30}$")
 _SHORTCODE = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
@@ -123,6 +128,14 @@ class FollowerList(BaseModel):
 
     accounts: list[Account]
     capped: bool
+
+
+class Walk(BaseModel):
+    """The union of repeated passes over a follower or following list."""
+
+    accounts: list[Account]
+    passes: int
+    complete: bool
 
 
 def parse_username(value: str) -> str:
@@ -249,22 +262,26 @@ async def get_post(client: AsyncClient, *, ref: str) -> PostInfo:
     )
 
 
-async def fetch_followers(
+async def _list_pass(
     client: AsyncClient,
     *,
-    profile: Profile,
+    edge: Edge,
+    user_pk: str,
     limit: int | None,
     on_progress: OnProgress | None = None,
-) -> FollowerList:
-    """The first `limit` unique followers (all if None), newest first.
+) -> list[Account]:
+    """One walk over a follower or following list, deduplicated by pk.
 
-    Pages can overlap, so accounts are deduplicated by pk, and a page that
-    adds nothing new ends the walk.
+    Instagram reorders these lists between requests, so pages overlap; a
+    page that adds nothing new ends the walk.
     """
+    fetch = (
+        client.user_followers if edge == "followers" else client.user_following
+    )
     seen: dict[str, Account] = {}
     cursor: str | None = None
     while True:
-        page: JSON = await client.user_followers(profile.pk, cursor=cursor)
+        page: JSON = await fetch(user_pk, cursor=cursor)
         added = 0
         for item in cast("list[JSON]", page.get("items") or []):
             account = Account.from_api(item)
@@ -272,17 +289,78 @@ async def fetch_followers(
                 seen[account.pk] = account
                 added += 1
             if limit is not None and len(seen) >= limit:
-                return FollowerList(accounts=list(seen.values()), capped=False)
+                return list(seen.values())
         if on_progress:
             on_progress(len(seen))
         next_cursor = page.get("next_cursor")
-        if not page.get("has_more") or not isinstance(next_cursor, str):
-            break
-        if not added:
-            break
+        if (
+            not page.get("has_more")
+            or not isinstance(next_cursor, str)
+            or not added
+        ):
+            return list(seen.values())
         cursor = next_cursor
-    capped = len(seen) < COMPLETE_SHARE * profile.follower_count
-    return FollowerList(accounts=list(seen.values()), capped=capped)
+
+
+async def fetch_followers(
+    client: AsyncClient,
+    *,
+    profile: Profile,
+    limit: int | None,
+    on_progress: OnProgress | None = None,
+) -> FollowerList:
+    """The first `limit` unique followers Instagram lists (all if None)."""
+    accounts = await _list_pass(
+        client,
+        edge="followers",
+        user_pk=profile.pk,
+        limit=limit,
+        on_progress=on_progress,
+    )
+    short = limit is None or len(accounts) < limit
+    capped = short and len(accounts) < COMPLETE_SHARE * profile.follower_count
+    return FollowerList(accounts=accounts, capped=capped)
+
+
+async def walk_until_complete(
+    client: AsyncClient,
+    *,
+    edge: Edge,
+    user_pk: str,
+    expected: int,
+    max_passes: int = MAX_PASSES,
+    stop_when: Callable[[set[str]], bool] | None = None,
+    on_progress: OnProgress | None = None,
+) -> Walk:
+    """Repeat whole-list passes until the union stops growing.
+
+    Stops early when `stop_when(pks)` holds, when the union reaches
+    `expected`, or when the first pass is cut short (business accounts).
+    """
+    union: dict[str, Account] = {}
+    passes = 0
+    while passes < max_passes:
+        passes += 1
+        before = len(union)
+        for account in await _list_pass(
+            client, edge=edge, user_pk=user_pk, limit=None
+        ):
+            union.setdefault(account.pk, account)
+        if on_progress:
+            on_progress(len(union))
+        if stop_when and stop_when(set(union)):
+            break
+        if len(union) >= expected:
+            break
+        if passes == 1 and len(union) < CUT_SHARE * expected:
+            break
+        if passes > 1 and len(union) == before:
+            break
+    return Walk(
+        accounts=list(union.values()),
+        passes=passes,
+        complete=len(union) >= COMPLETE_SHARE * expected,
+    )
 
 
 async def fetch_following(

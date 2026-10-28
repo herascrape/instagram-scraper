@@ -187,3 +187,38 @@ def test_audit_bad_tz(api: FakeAPI) -> None:
     result = runner.invoke(app, ["audit", "bakery", "--tz", "Mars/Base"])
     assert result.exit_code == 2
     assert api.requests == []
+
+
+def test_followers_budget_guard_non_interactive(api: FakeAPI) -> None:
+    api.route(
+        "/users/username/bakery", full_profile("9", "bakery", followers=100_000)
+    )
+    result = runner.invoke(app, ["followers", "bakery"])
+    assert result.exit_code == 2
+    assert "16,000 API calls" in result.stderr
+    assert api.paths("/users/9/followers") == []
+
+
+def test_followers_baseline_then_diff(api: FakeAPI, tmp_path: Path) -> None:
+    db = str(tmp_path / "f.sqlite3")
+    api.route(
+        "/users/username/bakery", full_profile("9", "bakery", followers=1)
+    )
+    api.route(
+        "/users/9/followers",
+        list_page([compact_user("1", "fan")], next_cursor=None),
+    )
+    first = runner.invoke(app, ["followers", "bakery", "--db", db])
+    assert first.exit_code == 0, first.output
+    assert "Baseline saved" in first.stdout
+    api.route(
+        "/users/9/followers",
+        list_page([compact_user("2", "newfan")], next_cursor=None),
+    )
+    second = runner.invoke(app, ["followers", "bakery", "--db", db, "--json"])
+    assert second.exit_code == 0, second.output
+    changes = json.loads(second.stdout)["changes"]
+    assert [(c["change"], c["account"]["username"]) for c in changes] == [
+        ("followed", "newfan"),
+        ("unfollowed", "fan"),
+    ]
