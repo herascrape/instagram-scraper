@@ -76,6 +76,7 @@ packages = ["instagram_scrapers"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 markers = [
     "live: hits the real api.herascrape.com (needs HERASCRAPE_API_KEY)",
 ]
