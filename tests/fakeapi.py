@@ -9,7 +9,8 @@ class FakeAPI:
     """A herascrape API stand-in for `httpx.MockTransport`.
 
     A route answers a path with an exact query; anything unrouted gets a
-    404 naming the request, so a missing fixture fails loudly. A route given
+    404 naming the request, so a missing fixture fails loudly. Successes are
+    wrapped in the API's ``{status, data}`` envelope. A route given
     several bodies serves them in turn and then repeats the last, the way
     Instagram reshuffles a list between identical requests.
     """
@@ -66,6 +67,10 @@ class FakeAPI:
             )
         replies = self._routes[key]
         status, body = replies.pop(0) if len(replies) > 1 else replies[0]
+        if 200 <= status < 300:
+            return httpx.Response(
+                status, json={"status": "success", "data": body}
+            )
         return httpx.Response(status, json=body)
 
     def transport(self) -> httpx.MockTransport:

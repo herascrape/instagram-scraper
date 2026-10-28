@@ -88,14 +88,14 @@ wheels = [
 
 [[package]]
 name = "herascrape"
-version = "0.1.5"
+version = "0.1.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/fd/d7/0744a51e1c4a0b74e3b022a471aff319c129430d6e55ae90aeabc5eb1a73/herascrape-0.1.5.tar.gz", hash = "sha256:916d8a427e40b65d854873df9ea254793648f3107fb01ac81a094e9bab381ab5", size = 14281, upload-time = "2026-10-28T01:41:34.003Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7a/c8/90e91b6fceef06f5939f3d9a03cad3b36558beca5d12df8a7d2860876045/herascrape-0.1.6.tar.gz", hash = "sha256:b886ccda7cb2914ce6ebfa89e868ca08cb8c490dab9d93af0e8ad36d1fa00b6b", size = 14339, upload-time = "2026-10-28T11:46:47.803Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a2/e7/530f5e97ab8bab1f0b37bbabf32f843ed82149d41dca7e94c0106e075cf6/herascrape-0.1.5-py3-none-any.whl", hash = "sha256:65303f4fbd4c548ade8550eea156d925a87d912ddc36f6514f6d13aeff83f57f", size = 19855, upload-time = "2026-10-28T01:41:32.848Z" },
+    { url = "https://files.pythonhosted.org/packages/0a/ee/b91c692cf7645f0a66671d168a7956cfa9cc650f5e49ae81751d4442b469/herascrape-0.1.6-py3-none-any.whl", hash = "sha256:c8ce472d3c2b1ee93c04d7e5de1b92fd1f79abf642d1ea25f47d843ebeb2d474", size = 19906, upload-time = "2026-10-28T11:46:46.841Z" },
 ]
 
 [[package]]
@@ -167,7 +167,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "herascrape", specifier = ">=0.1.5" },
+    { name = "herascrape", specifier = ">=0.1.6" },
     { name = "platformdirs", specifier = ">=4" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "rich", specifier = ">=13" },
